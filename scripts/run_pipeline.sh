@@ -48,7 +48,7 @@ export OUTPUT_DIR="$HOME/fud-work/output"
 export SCREENSHOT_DIR="$HOME/fud-work/screenshots"
 export NP_MANAGER_EMAIL
 export NP_MANAGER_PASS
-python3 scripts/np_manager_v2.py || echo "Pipeline completed with errors"
+python3 scripts/np_manager_auto.py || echo "Pipeline completed with errors"
 
 # List outputs
 echo "=== Output Files ==="

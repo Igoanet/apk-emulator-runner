@@ -42,7 +42,7 @@ test -s ~/fud-work/input/base.apk || { echo "APK empty"; exit 1; }
 
 # Run full pipeline
 echo "=== Running Full Pipeline ==="
-export NP_APK="${NP_APK:-~/apk-tools/np_manager.apk}"
+export NP_APK="${NP_APK:-$HOME/apk-tools/np_manager.apk}"
 export INPUT_APK="$HOME/fud-work/input/base.apk"
 export OUTPUT_DIR="$HOME/fud-work/output"
 export SCREENSHOT_DIR="$HOME/fud-work/screenshots"

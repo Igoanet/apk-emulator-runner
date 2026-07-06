@@ -2,7 +2,7 @@
 import os
 from pathlib import Path
 
-BASE_DIR = Path("/home/runner/workspace")
+BASE_DIR = Path(os.environ.get("FUD_WORKSPACE", os.getcwd()))
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 TEMP_DIR = BASE_DIR / "temp"
@@ -42,7 +42,7 @@ KS_LEGACY_ALIAS = "release"
 TARGET_PACKAGE = "com.google.android.gms"
 TARGET_LABEL = "Google Play Services"
 
-_TOOLS_PATH = "/home/runner/workspace/android-tools-bin"
+_TOOLS_PATH = os.environ.get("ANDROID_TOOLS", "/tmp/android-tools-bin")
 ADB = f"{_TOOLS_PATH}/adb" if os.path.exists(f"{_TOOLS_PATH}/adb") else "adb"
 APKTOOL = "apktool"
 ZIPALIGN = f"{_TOOLS_PATH}/zipalign" if os.path.exists(f"{_TOOLS_PATH}/zipalign") else "zipalign"

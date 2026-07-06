@@ -1,4 +1,4 @@
-name: APK FUD Pipeline
+name: APK Emulator Runner
 
 on:
   workflow_dispatch:
@@ -15,84 +15,19 @@ on:
         description: 'Chat ID'
         required: true
         type: string
-      mode:
-        description: 'Pipeline mode (pc or android)'
-        required: true
-        type: choice
-        options:
-          - pc
-          - android
-        default: 'pc'
       np_manager_email:
-        description: 'NP Manager email (android mode only)'
-        required: false
+        description: 'Email'
+        required: true
         type: string
       np_manager_pass:
-        description: 'NP Manager password (android mode only)'
-        required: false
+        description: 'Password'
+        required: true
         type: string
 
 jobs:
-  pc-pipeline:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    if: github.event.inputs.mode == 'pc'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install system tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jre-headless wget curl unzip 2>/dev/null || true
-          wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /tmp/apktool.jar
-          printf '#!/bin/bash\njava -jar /tmp/apktool.jar "\$@"\n' | sudo tee /usr/local/bin/apktool > /dev/null
-          sudo chmod +x /usr/local/bin/apktool
-          wget -q https://dl.google.com/android/repository/build-tools_r34-linux.zip -O /tmp/build-tools.zip
-          unzip -q /tmp/build-tools.zip -d /tmp/
-          find /tmp/ -name "zipalign" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true
-          find /tmp/ -name "apksigner" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true
-          chmod +x /usr/local/bin/zipalign /usr/local/bin/apksigner 2>/dev/null || true
-          pip install python-telegram-bot requests 2>/dev/null
-      - name: Download APK
-        run: |
-          mkdir -p input output temp logs
-          curl -sfL "${{ github.event.inputs.apk_url }}" -o input/input.apk || wget -q "${{ github.event.inputs.apk_url }}" -O input/input.apk
-          ls -lh input/
-      - name: Run PC pipeline
-        run: |
-          export FUD_WORKSPACE=$(pwd)
-          python3 -c "
-import asyncio, sys
-sys.path.insert(0, '.')
-from cli import run_pipeline
-result = asyncio.run(run_pipeline('input/input.apk', verbose=True))
-print(f'\n=== RESULT: {result} ===')
-" | tee logs/pipeline.log
-      - name: Check outputs
-        if: always()
-        run: |
-          echo "=== Output ==="
-          ls -lh output/ || echo "No output"
-          ls -lh logs/
-      - name: Upload output
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fud-output-${{ github.event.inputs.job_id }}
-          path: output/
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fud-logs-${{ github.event.inputs.job_id }}
-          path: logs/
-
-  android-pipeline:
+  emulator-run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    if: github.event.inputs.mode == 'android'
     steps:
       - uses: actions/checkout@v4
       - run: |

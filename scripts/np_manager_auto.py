@@ -231,10 +231,10 @@ def handle_login():
 
 def open_apk():
     print("[*] Opening APK...")
-    if not os.path.exists(INPUT_APK):
+    if not os.path.exists(os.path.expanduser(INPUT_APK)):
         print("[!] Input APK missing")
         return False
-    adb(f"push '{INPUT_APK}' /sdcard/Download/input.apk")
+    adb(f"push '{os.path.expanduser(INPUT_APK)}' /sdcard/Download/input.apk")
     time.sleep(1)
     adb("shell am start -a android.intent.action.VIEW -d file:///sdcard/Download/input.apk -t application/vnd.android.package-archive")
     time.sleep(5)

@@ -304,39 +304,24 @@ def open_apk():
 
 
 def get_all_clickable(xml):
-    """Extract all clickable elements with their text and coordinates."""
+    """Extract ALL nodes with text or content-desc from UIAutomator XML."""
     results = []
-    # Match nodes with click="true" or that have text/content-desc
+    seen = set()
+    
+    # Pattern to match any <node> tag with text or content-desc
+    # The attributes can appear in ANY order in the XML
     pat = re.compile(
-        r'<node[^>]*?clickable="true"[^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
+        r'<node\b[^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
         re.DOTALL
     )
     for m in pat.finditer(xml):
         text, x1, y1, x2, y2 = m.groups()
-        if text.strip() and len(text.strip()) > 1:
-            cx, cy = (int(x1)+int(x2))//2, (int(y1)+int(y2))//2
-            results.append((text.strip(), cx, cy))
-    
-    # Also get nodes with text that look like buttons/actions even if not clickable="true"
-    pat2 = re.compile(
-        r'<node[^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
-        re.DOTALL
-    )
-    seen = {r[0] for r in results}
-    for m in pat2.finditer(xml):
-        text, x1, y1, x2, y2 = m.groups()
         t = text.strip()
-        if t and t not in seen and len(t) > 1 and len(t) < 50:
-            # Filter for likely actionable text
-            action_keywords = ["OK", "Apply", "Start", "Run", "Save", "Build", "Export", "Protect",
-                             "确定", "应用", "开始", "保存", "生成", "运行",
-                             "保护", "处理", "编译", "打开", "关闭", "设置",
-                             "加密", "反伪", "混淆", "虚拟", "工具", "项目",
-                             "文件", "类", "方法", "字段", "资源", "布局"]
-            if any(kw.lower() in t.lower() for kw in action_keywords):
-                cx, cy = (int(x1)+int(x2))//2, (int(y1)+int(y2))//2
-                results.append((t, cx, cy))
-                seen.add(t)
+        if t and t not in seen and len(t) > 0 and t not in ["", "null", "NULL"]:
+            cx, cy = (int(x1)+int(x2))//2, (int(y1)+int(y2))//2
+            results.append((t, cx, cy))
+            seen.add(t)
+    
     return results
 
 def run_tools():

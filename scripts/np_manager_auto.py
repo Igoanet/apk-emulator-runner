@@ -42,11 +42,13 @@ def get_xml():
     return r.stdout
 
 def find_text(xml, text):
-    pat = re.compile(r'<node[^>]*text="' + re.escape(text) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
-    m = pat.search(xml)
-    if m:
-        x1, y1, x2, y2 = map(int, m.groups())
-        return ((x1+x2)//2, (y1+y2)//2)
+    # Check text, content-desc, and resource-id attributes
+    for attr in ['text', 'content-desc', 'resource-id']:
+        pat = re.compile(r'<node[^>]*' + attr + r'="' + re.escape(text) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+        m = pat.search(xml)
+        if m:
+            x1, y1, x2, y2 = map(int, m.groups())
+            return ((x1+x2)//2, (y1+y2)//2)
     return None
 
 def tap_text(xml, text, desc=""):

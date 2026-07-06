@@ -303,85 +303,121 @@ def open_apk():
     return True  # Don't fail, try to continue
 
 
+def get_all_clickable(xml):
+    """Extract all clickable elements with their text and coordinates."""
+    results = []
+    # Match nodes with click="true" or that have text/content-desc
+    pat = re.compile(
+        r'<node[^>]*?clickable="true"[^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
+        re.DOTALL
+    )
+    for m in pat.finditer(xml):
+        text, x1, y1, x2, y2 = m.groups()
+        if text.strip() and len(text.strip()) > 1:
+            cx, cy = (int(x1)+int(x2))//2, (int(y1)+int(y2))//2
+            results.append((text.strip(), cx, cy))
+    
+    # Also get nodes with text that look like buttons/actions even if not clickable="true"
+    pat2 = re.compile(
+        r'<node[^>]*?(?:text|content-desc)="([^"]*)"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
+        re.DOTALL
+    )
+    seen = {r[0] for r in results}
+    for m in pat2.finditer(xml):
+        text, x1, y1, x2, y2 = m.groups()
+        t = text.strip()
+        if t and t not in seen and len(t) > 1 and len(t) < 50:
+            # Filter for likely actionable text
+            action_keywords = ["OK", "Apply", "Start", "Run", "Save", "Build", "Export", "Protect",
+                             "确定", "应用", "开始", "保存", "生成", "运行",
+                             "保护", "处理", "编译", "打开", "关闭", "设置",
+                             "加密", "反伪", "混淆", "虚拟", "工具", "项目",
+                             "文件", "类", "方法", "字段", "资源", "布局"]
+            if any(kw.lower() in t.lower() for kw in action_keywords):
+                cx, cy = (int(x1)+int(x2))//2, (int(y1)+int(y2))//2
+                results.append((t, cx, cy))
+                seen.add(t)
+    return results
+
 def run_tools():
-    # NP Manager Premium tools - try to find and apply whatever is available
-    all_tool_keywords = [
-        "加密", "反伪", "反VT", "反追踪", "自定义", "虚拟机", "混淆",
-        "Encrypt", "Anti", "VM", "Dex2C", "Custom", "Protection", "Obfuscate",
-        "String", "Resource", "Native", "Signature", "Manifest", "Debug",
-        "签名", "资源", "字符串", "本地化", "加巡", "检测",
-    ]
+    print("[*] === NP Manager Tool Discovery ===")
     
-    apply_keywords = ["OK", "Apply", "确定", "应用", "开始", "Start", 
-                     "运行", "Run", "生成", "Generate", "确认", "处理"]
-    
-    # Try multiple ways to access tools
-    print("[*] Attempting to access NP Manager tools...")
-    
-    # Method 1: Try MENU key
-    adb("shell input keyevent 82")
-    time.sleep(2)
+    # Get initial project view
     xml = get_xml()
-    screenshot("np_after_menu")
+    screenshot("np_project_view")
     
-    # Method 2: Try tapping bottom-right area for FAB or action buttons  
-    for rx, ry in [(0.90, 0.90), (0.85, 0.85), (0.92, 0.88)]:
-        tap_rel(rx, ry, f"FAB try {rx},{ry}")
-        time.sleep(1)
+    # List all clickable elements
+    clickable = get_all_clickable(xml)
+    print(f"[*] Found {len(clickable)} clickable elements:")
+    for text, cx, cy in clickable:
+        print(f"    [{text}] @ ({cx},{cy})")
     
-    # Method 3: Try common toolbar positions
-    for rx, ry in [(0.95, 0.06), (0.90, 0.08), (0.85, 0.06)]:
-        tap_rel(rx, ry, f"Toolbar {rx},{ry}")
-        time.sleep(1.5)
-        xml = get_xml()
-        # Check if any tool keyword appeared
-        found_tools = [kw for kw in all_tool_keywords if find_text(xml, kw)]
-        if found_tools:
-            print(f"[+] Found tools after toolbar tap: {found_tools}")
+    # Try to find and tap menu/action buttons that might reveal tools
+    # In NP Manager, tools are often in a slide-out drawer or accessed via top menu
+    menu_patterns = ["Menu", "More", "\u66f4\u591a", "\u83dc\u5355", "\u529f\u80fd", "\u5de5\u5177",
+                    "\u8bbe\u7f6e", "Settings", "Options", "\u9009\u9879"]
+    
+    for text, cx, cy in clickable:
+        if any(p.lower() in text.lower() for p in menu_patterns):
+            print(f"[*] Tapping menu button: [{text}] @ ({cx},{cy})")
+            adb(f"shell input tap {cx} {cy}")
+            time.sleep(2)
             break
+    else:
+        # No explicit menu found, try top-left hamburger (common in Android)
+        print("[*] No menu button found, trying hamburger area...")
+        tap_rel(0.05, 0.08, "Hamburger area")
+        time.sleep(2)
     
-    # Method 4: Try looking for a list view and scrolling through it
-    print("[*] Trying to scroll project view for tools...")
-    for scroll_i in range(8):
+    # Now scan for tools in the opened menu/view
+    xml = get_xml()
+    screenshot("np_menu_opened")
+    clickable = get_all_clickable(xml)
+    print(f"[*] After menu: {len(clickable)} clickable elements:")
+    for text, cx, cy in clickable:
+        print(f"    [{text}] @ ({cx},{cy})")
+    
+    # Look for tool-like options
+    tool_texts = []
+    for text, cx, cy in clickable:
+        # Skip navigation elements
+        if text in ["Back", "\u8fd4\u56de", "Cancel", "\u53d6\u6d88", "Close", "\u5173\u95ed"]:
+            continue
+        # Collect potential tool buttons
+        tool_texts.append((text, cx, cy))
+    
+    # Try tapping each potential tool (up to 10)
+    for i, (text, cx, cy) in enumerate(tool_texts[:10]):
+        print(f"\n[*] Trying tool [{i+1}]: [{text}] @ ({cx},{cy})")
+        adb(f"shell input tap {cx} {cy}")
+        time.sleep(2)
         xml = get_xml()
-        found = False
-        for kw in all_tool_keywords:
-            if tap_text(xml, kw, f"Found: {kw}"):
-                print(f"[+] Tapped tool: {kw}")
-                time.sleep(3)
-                # Try to apply
-                apply_xml = get_xml()
-                for btn in apply_keywords:
-                    if tap_text(apply_xml, btn, f"Apply: {btn}"):
-                        time.sleep(5)
-                        break
-                found = True
+        screenshot(f"np_tool_{i}_{text[:15]}")
+        
+        # Check if we got to a configuration screen (has apply/start buttons)
+        apply_btns = ["OK", "Apply", "\u786e\u5b9a", "\u5e94\u7528", "\u5f00\u59cb", "Start",
+                     "\u8fd0\u884c", "Run", "\u751f\u6210", "Generate", "\u786e\u8ba4", "Confirm"]
+        found_apply = False
+        for btn in apply_btns:
+            coords = find_text(xml, btn)
+            if coords:
+                print(f"[+] Found apply button [{btn}], tapping...")
+                adb(f"shell input tap {coords[0]} {coords[1]}")
+                time.sleep(5)
+                found_apply = True
                 break
         
-        if not found:
-            # Try scrolling - use larger swipe distance
-            adb("shell input swipe 160 500 160 100 800")
-            time.sleep(2)
-        else:
-            # Go back to project view for next tool
-            adb("shell input keyevent 4")
-            time.sleep(1.5)
+        if not found_apply:
+            # Check if this opened a sub-menu with more options
+            sub_clickable = get_all_clickable(get_xml())
+            if len(sub_clickable) > len(tool_texts):
+                print(f"[*] Sub-menu opened with {len(sub_clickable)} options")
+        
+        # Go back
+        adb("shell input keyevent 4")
+        time.sleep(1.5)
     
-    print("\n[*] Tool search complete")
-    
-    # Also try to find any batch/protect-all option
-    xml = get_xml()
-    batch_keywords = ["Protect", "保护", "Obfuscate", "混淆", "All", "全部", "Batch", "批量"]
-    for kw in batch_keywords:
-        if tap_text(xml, kw, f"Batch: {kw}"):
-            print(f"[+] Found batch option: {kw}")
-            time.sleep(3)
-            apply_xml = get_xml()
-            for btn in apply_keywords:
-                if tap_text(apply_xml, btn, f"Apply batch: {btn}"):
-                    time.sleep(10)
-                    break
-            break
+    print("\n[*] Tool exploration complete")
 
 
 def save_output():

@@ -2,48 +2,56 @@
 set -e
 
 echo "========================================"
-echo "NP Manager Pipeline Script"
-echo "APK_URL: $APK_URL"
-echo "NP_APK: $NP_APK"
-echo "EMAIL: $NP_MANAGER_EMAIL"
+echo "APK FUD Pipeline v20 - Full Tool Chain"
 echo "========================================"
 
+# Wait for ADB device
 adb wait-for-device
-echo "=== Device Info ==="
+echo "=== Device Connected ==="
 adb shell getprop ro.product.model
 adb shell getprop ro.build.version.release
 
-echo "=== Installing APK Tools ==="
-NP_APK="${NP_APK:-$HOME/apk-tools/np_manager.apk}"
-test -f "$NP_APK" && adb install -r -d "$NP_APK" && echo "NP Manager installed" || echo "NP Manager not found"
-test -f ~/apk-tools/mt_manager.apk && adb install -r -d ~/apk-tools/mt_manager.apk && echo "MT Manager installed" || echo "MT Manager not found"
-test -f ~/apk-tools/apktool_m.apk && adb install -r -d ~/apk-tools/apktool_m.apk && echo "APKTool M installed" || echo "APKTool M not found"
+# Create work directories
+mkdir -p ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots ~/apk-tools
 
+# Download APK Tools from VPS if available
+VPS_HOST="${VPS_HOST:-13.60.208.8}"
+echo "=== Downloading APK Tools from VPS ==="
+
+# Try to download tools from VPS
+curl -s "http://${VPS_HOST}/input/np_manager.apk" -o ~/apk-tools/np_manager.apk 2>/dev/null || echo "NP Manager not available on VPS"
+curl -s "http://${VPS_HOST}/input/mt_manager.apk" -o ~/apk-tools/mt_manager.apk 2>/dev/null || echo "MT Manager not available on VPS"
+curl -s "http://${VPS_HOST}/input/apktool_m.apk" -o ~/apk-tools/apktool_m.apk 2>/dev/null || echo "APKTool M not available on VPS"
+
+# Check local attached_assets if VPS download failed
+if [ ! -f ~/apk-tools/np_manager.apk ] && [ -f attached_assets/NP_Manager_*.apk ]; then
+  cp attached_assets/NP_Manager_*.apk ~/apk-tools/np_manager.apk
+fi
+
+ls -lh ~/apk-tools/
+
+# Download input APK
 echo "=== Download Input APK ==="
-mkdir -p ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
 APK_URL="${APK_URL:-}"
 if echo "$APK_URL" | grep -q "^http"; then
   wget -q "$APK_URL" -O ~/fud-work/input/base.apk && echo "Downloaded $(stat -c%s ~/fud-work/input/base.apk) bytes" || echo "wget failed"
 else
-  echo "No valid APK URL provided"
-  touch ~/fud-work/input/base.apk
+  echo "No APK URL provided"
 fi
-test -s ~/fud-work/input/base.apk || { echo "APK empty"; touch ~/fud-work/input/base.apk; }
-ls -lh ~/fud-work/input/
+test -s ~/fud-work/input/base.apk || { echo "APK empty"; exit 1; }
 
-echo "=== Run NP Manager Automation ==="
-export NP_APK
+# Run full pipeline
+echo "=== Running Full Pipeline ==="
+export NP_APK="${NP_APK:-~/apk-tools/np_manager.apk}"
 export INPUT_APK="$HOME/fud-work/input/base.apk"
 export OUTPUT_DIR="$HOME/fud-work/output"
-export APK_URL
 export SCREENSHOT_DIR="$HOME/fud-work/screenshots"
 export NP_MANAGER_EMAIL
 export NP_MANAGER_PASS
-python3 github_automation/np_manager_auto.py || echo "Automation failed"
-ls -lh ~/fud-work/output/
+python3 scripts/np_manager_v2.py || echo "Pipeline completed with errors"
 
-echo "=== Pull Screenshots ==="
-adb pull /sdcard/screenshots/ ~/fud-work/screenshots/ 2>/dev/null || echo "No screenshots on device"
-ls -lh ~/fud-work/screenshots/ 2>/dev/null || echo "No local screenshots"
+# List outputs
+echo "=== Output Files ==="
+ls -lh ~/fud-work/output/ || echo "No output"
 
 echo "=== Done ==="

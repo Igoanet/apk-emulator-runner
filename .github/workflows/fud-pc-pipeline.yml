@@ -1,5 +1,4 @@
 name: APK FUD PC Pipeline
-
 on:
   workflow_dispatch:
     inputs:
@@ -23,21 +22,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install system dependencies
+      - name: Install tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq openjdk-17-jre-headless 2>/dev/null || true
-          # Install apktool
           wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /tmp/apktool.jar
-          echo '#!/bin/bash' | sudo tee /usr/local/bin/apktool
-          echo 'java -jar /tmp/apktool.jar "$@"' | sudo tee -a /usr/local/bin/apktool
+          echo '#!/bin/bash
+java -jar /tmp/apktool.jar "\$@"' | sudo tee /usr/local/bin/apktool > /dev/null
           sudo chmod +x /usr/local/bin/apktool
-          # Download zipalign + apksigner from Android build tools
           wget -q https://dl.google.com/android/repository/build-tools_r34-linux.zip -O /tmp/build-tools.zip
           unzip -q /tmp/build-tools.zip -d /tmp/
           find /tmp/ -name "zipalign" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true
@@ -45,24 +41,22 @@ jobs:
           chmod +x /usr/local/bin/zipalign /usr/local/bin/apksigner 2>/dev/null || true
           pip install python-telegram-bot requests 2>/dev/null
 
-      - name: Download input APK
+      - name: Download APK
         run: |
           mkdir -p input output temp logs
           curl -sfL "${{ github.event.inputs.apk_url }}" -o input/input.apk || wget -q "${{ github.event.inputs.apk_url }}" -O input/input.apk
           ls -lh input/
 
-      - name: Run PC FUD Pipeline
+      - name: Run pipeline
         run: |
           export FUD_WORKSPACE=$(pwd)
           python3 -c "
-import asyncio, sys, os
+import asyncio, sys
 sys.path.insert(0, '.')
 from cli import run_pipeline
 result = asyncio.run(run_pipeline('input/input.apk', verbose=True))
 print(f'\n=== RESULT: {result} ===')
 " | tee logs/pipeline.log
-        env:
-          FUD_WORKSPACE: ${{ github.workspace }}
 
       - name: Check outputs
         if: always()
@@ -84,5 +78,4 @@ print(f'\n=== RESULT: {result} ===')
         uses: actions/upload-artifact@v4
         with:
           name: fud-logs-${{ github.event.inputs.job_id }}
-          path: |
-            logs/
+          path: logs/

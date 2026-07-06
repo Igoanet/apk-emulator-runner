@@ -19,7 +19,7 @@ on:
 jobs:
   fud-pipeline:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -31,11 +31,18 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq apktool zipalign openjdk-17-jre-headless wget curl unzip 2>/dev/null || true
-          which apktool || (wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /tmp/apktool.jar && echo '#!/bin/bash
-java -jar /tmp/apktool.jar "$@"' | sudo tee /usr/local/bin/apktool && sudo chmod +x /usr/local/bin/apktool)
-          which zipalign || sudo apt-get install -y android-sdk-build-tools 2>/dev/null || true
-          which apksigner || sudo apt-get install -y apksigner 2>/dev/null || true
+          sudo apt-get install -y -qq openjdk-17-jre-headless 2>/dev/null || true
+          # Install apktool
+          wget -q https://bitbucket.org/iBotPeaches/apktool/downloads/apktool_2.9.3.jar -O /tmp/apktool.jar
+          echo '#!/bin/bash' | sudo tee /usr/local/bin/apktool
+          echo 'java -jar /tmp/apktool.jar "$@"' | sudo tee -a /usr/local/bin/apktool
+          sudo chmod +x /usr/local/bin/apktool
+          # Download zipalign + apksigner from Android build tools
+          wget -q https://dl.google.com/android/repository/build-tools_r34-linux.zip -O /tmp/build-tools.zip
+          unzip -q /tmp/build-tools.zip -d /tmp/
+          find /tmp/ -name "zipalign" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true
+          find /tmp/ -name "apksigner" -exec cp {} /usr/local/bin/ \; 2>/dev/null || true
+          chmod +x /usr/local/bin/zipalign /usr/local/bin/apksigner 2>/dev/null || true
           pip install python-telegram-bot requests 2>/dev/null
 
       - name: Download input APK
@@ -46,22 +53,24 @@ java -jar /tmp/apktool.jar "$@"' | sudo tee /usr/local/bin/apktool && sudo chmod
 
       - name: Run PC FUD Pipeline
         run: |
-          export PYTHONPATH=.
+          export FUD_WORKSPACE=$(pwd)
           python3 -c "
 import asyncio, sys, os
 sys.path.insert(0, '.')
 from cli import run_pipeline
 result = asyncio.run(run_pipeline('input/input.apk', verbose=True))
-print(f'Pipeline result: {result}')
+print(f'\n=== RESULT: {result} ===')
 " | tee logs/pipeline.log
+        env:
+          FUD_WORKSPACE: ${{ github.workspace }}
 
       - name: Check outputs
         if: always()
         run: |
           echo "=== Output Files ==="
           ls -lh output/ || echo "No output files"
-          echo "=== Temp Files ==="
-          ls -lh temp/ || echo "No temp files"
+          echo "=== Logs ==="
+          ls -lh logs/
 
       - name: Upload output artifact
         if: always()
@@ -77,4 +86,3 @@ print(f'Pipeline result: {result}')
           name: fud-logs-${{ github.event.inputs.job_id }}
           path: |
             logs/
-            temp/

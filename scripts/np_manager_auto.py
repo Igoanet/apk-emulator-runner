@@ -42,14 +42,34 @@ def get_xml():
     return r.stdout
 
 def find_text(xml, text):
-    # Check text, content-desc, and resource-id attributes
+    # Check text, content-desc, and resource-id attributes with flexible regex
+    escaped = re.escape(text)
     for attr in ['text', 'content-desc', 'resource-id']:
-        pat = re.compile(r'<node[^>]*' + attr + r'="' + re.escape(text) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
+        # Pattern that handles any attribute order within a node tag
+        pat = re.compile(
+            r'<node[^>]*?\b' + attr + r'="' + escaped + r'"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*?>',
+            re.DOTALL
+        )
         m = pat.search(xml)
         if m:
             x1, y1, x2, y2 = map(int, m.groups())
             return ((x1+x2)//2, (y1+y2)//2)
     return None
+
+def list_all_text(xml, max_items=50):
+    """Debug: list all text/content-desc elements found in XML."""
+    results = []
+    for attr in ['text', 'content-desc']:
+        pat = re.compile(r'<node[^>]*?\b' + attr + r'="([^"]*)"[^>]*?>', re.DOTALL)
+        for m in pat.finditer(xml):
+            val = m.group(1).strip()
+            if val and len(val) > 1 and val not in [r for r, _ in results]:
+                results.append((val, attr))
+                if len(results) >= max_items:
+                    break
+        if len(results) >= max_items:
+            break
+    return results
 
 def tap_text(xml, text, desc=""):
     c = find_text(xml, text)
@@ -272,70 +292,91 @@ def run_tools():
         ("Dex2C", ["Dex2C", "Native", "DEX", "混淆", "代码混淆", "Obfuscate", "Obfuscation"]),
     ]
     
+    # First, dump all UI text for debugging
+    print("[*] Dumping project view UI elements...")
+    xml = get_xml()
+    all_text = list_all_text(xml, 30)
+    for val, attr in all_text:
+        print(f"    [{attr}] {val}")
+    
+    # Try to access tools menu
+    print("[*] Trying MENU key for tools menu...")
+    adb("shell input keyevent 82")
+    time.sleep(2)
+    xml = get_xml()
+    screenshot("np_menu_attempt")
+    
+    menu_keywords = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", 
+                    "防护", "防护配置", "功能", "Functions", "功能列表"]
+    menu_opened = False
+    for kw in menu_keywords:
+        if tap_text(xml, kw, f"Menu: {kw}"):
+            menu_opened = True
+            time.sleep(2)
+            break
+    
+    if not menu_opened:
+        print("[*] No menu found with MENU key, trying toolbar taps...")
+        # Try multiple toolbar positions
+        for rx, ry in [(0.92, 0.08), (0.85, 0.08), (0.80, 0.06), (0.90, 0.06), (0.95, 0.10)]:
+            tap_rel(rx, ry, f"Toolbar {rx},{ry}")
+            time.sleep(2)
+            xml = get_xml()
+            for kw in menu_keywords:
+                if find_text(xml, kw):
+                    tap_text(xml, kw, f"MenuTap: {kw}")
+                    menu_opened = True
+                    time.sleep(2)
+                    break
+            if menu_opened:
+                break
+    
+    if not menu_opened:
+        print("[!] Could not open tools menu, trying direct tool search...")
+    
     for tool_name, keywords in tools:
         print(f"\n[*] === {tool_name} ===")
         screenshot(f"np_{tool_name.replace(' ', '_')[:20]}")
-        
-        # Step 1: Get current XML state
         xml = get_xml()
         
-        # Step 2: Try to find a Tools/Protection/Obfuscate menu first
-        nav_found = False
-        nav_buttons = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", 
-                      "防护", "防护配置", "功能", "Functions", "功能列表"]
-        for nav in nav_buttons:
-            if find_text(xml, nav):
-                tap_text(xml, nav, f"Nav: {nav}")
-                nav_found = True
-                time.sleep(2)  # Wait for menu to open
-                break
-        
-        if not nav_found:
-            # Try toolbar area - NP Manager usually has a menu button at top-right
-            print("[*] Trying toolbar menu...")
-            tap_rel(0.85, 0.08, "Toolbar right")  # Top-right area
-            time.sleep(2)
-        
-        # Step 3: Now search for the tool in the current view
-        xml = get_xml()
+        # Search for tool
         tool_tapped = False
         for kw in keywords:
             if tap_text(xml, kw, f"Tool: {kw}"):
                 tool_tapped = True
                 break
         
-        # Step 4: If not found, scroll and try again
+        # If not found, try scrolling
         if not tool_tapped:
             print(f"[*] Scrolling for {tool_name}...")
-            for scroll_i in range(4):
-                adb("shell input swipe 160 400 160 200 500")  # Scroll down
+            for scroll_i in range(5):
+                adb("shell input swipe 160 400 160 200 500")
                 time.sleep(1.5)
                 xml = get_xml()
                 for kw in keywords:
-                    if tap_text(xml, kw, f"Scroll Tool: {kw}"):
+                    if tap_text(xml, kw, f"Scroll: {kw}"):
                         tool_tapped = True
                         break
                 if tool_tapped:
                     break
         
-        # Step 5: If tool was tapped, try to apply it
         if tool_tapped:
             print(f"[+] {tool_name} tapped")
             time.sleep(3)
-            # Try to find and tap apply/confirm button
+            # Try to apply
             apply_xml = get_xml()
-            apply_buttons = ["OK", "Apply", "确定", "应用", "开始", "Start", 
-                           "运行", "Run", "生成", "Generate", "Confirm", "确认", 
-                           "继续", "Continue", "处理", "Process"]
-            for btn in apply_buttons:
+            apply_btns = ["OK", "Apply", "确定", "应用", "开始", "Start", 
+                         "运行", "Run", "生成", "Generate", "Confirm", "确认", 
+                         "继续", "Continue", "处理", "Process"]
+            for btn in apply_btns:
                 if tap_text(apply_xml, btn, f"Apply: {btn}"):
                     time.sleep(5)
                     break
         else:
             print(f"[!] {tool_name} not found, skip")
         
-        # Step 6: Press back to return to project view before next tool
-        adb("shell input keyevent 4")  # BACK key
+        # Press back to return to project view
+        adb("shell input keyevent 4")
         time.sleep(1)
     
     print("\n[+] All NP tools done")

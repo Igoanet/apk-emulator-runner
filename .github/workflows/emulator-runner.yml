@@ -52,8 +52,6 @@ name: APK Emulator Runner
         - name: Download APK Tools
           run: |
             mkdir -p ~/apk-tools ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
-            # Download NP Manager from URL or use cached
-            wget -q "${{ github.event.inputs.np_apk_url || 'https://placeholder' }}" -O ~/apk-tools/np_manager.apk 2>/dev/null || echo "NP Manager download skipped"
             ls -lh ~/apk-tools/
 
         - name: Emulator + NP Manager Automation

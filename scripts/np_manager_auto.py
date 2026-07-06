@@ -275,40 +275,41 @@ def run_tools():
     for tool_name, keywords in tools:
         print(f"\n[*] === {tool_name} ===")
         screenshot(f"np_{tool_name.replace(' ', '_')[:20]}")
+        
+        # Step 1: Get current XML state
         xml = get_xml()
         
-        # Try multiple navigation patterns to find tools
-        tool_tapped = False
-        
-        # Pattern 1: Try "Tools" or "Protection" or "Obfuscate" tab/button
-        nav_buttons = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", "防护", "防护配置"]
-        nav_tapped = False
+        # Step 2: Try to find a Tools/Protection/Obfuscate menu first
+        nav_found = False
+        nav_buttons = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", 
+                      "防护", "防护配置", "功能", "Functions", "功能列表"]
         for nav in nav_buttons:
-            if tap_text(xml, nav, f"Nav: {nav}"):
-                nav_tapped = True
-                time.sleep(2)
-                xml = get_xml()  # Refresh XML after tapping
+            if find_text(xml, nav):
+                tap_text(xml, nav, f"Nav: {nav}")
+                nav_found = True
+                time.sleep(2)  # Wait for menu to open
                 break
         
-        if not nav_tapped:
-            # Try toolbar coordinates (top area of project view)
-            # NP Manager typically has a toolbar with action buttons around y=38-80
-            tap_rel(0.85, 0.08, "Toolbar right")
-            time.sleep(1)
-            xml = get_xml()
+        if not nav_found:
+            # Try toolbar area - NP Manager usually has a menu button at top-right
+            print("[*] Trying toolbar menu...")
+            tap_rel(0.85, 0.08, "Toolbar right")  # Top-right area
+            time.sleep(2)
         
-        # Now look for the specific tool
+        # Step 3: Now search for the tool in the current view
+        xml = get_xml()
+        tool_tapped = False
         for kw in keywords:
             if tap_text(xml, kw, f"Tool: {kw}"):
                 tool_tapped = True
                 break
         
+        # Step 4: If not found, scroll and try again
         if not tool_tapped:
-            # Try scrolling down in tools list
             print(f"[*] Scrolling for {tool_name}...")
-            for _ in range(3):
+            for scroll_i in range(4):
                 adb("shell input swipe 160 400 160 200 500")  # Scroll down
-                time.sleep(1)
+                time.sleep(1.5)
                 xml = get_xml()
                 for kw in keywords:
                     if tap_text(xml, kw, f"Scroll Tool: {kw}"):
@@ -317,18 +318,25 @@ def run_tools():
                 if tool_tapped:
                     break
         
+        # Step 5: If tool was tapped, try to apply it
         if tool_tapped:
             print(f"[+] {tool_name} tapped")
             time.sleep(3)
-            # Try to apply/confirm the tool
+            # Try to find and tap apply/confirm button
             apply_xml = get_xml()
-            apply_buttons = ["OK", "Apply", "确定", "应用", "开始", "Start", "运行", "Run", "生成", "Generate"]
+            apply_buttons = ["OK", "Apply", "确定", "应用", "开始", "Start", 
+                           "运行", "Run", "生成", "Generate", "Confirm", "确认", 
+                           "继续", "Continue", "处理", "Process"]
             for btn in apply_buttons:
                 if tap_text(apply_xml, btn, f"Apply: {btn}"):
                     time.sleep(5)
                     break
         else:
             print(f"[!] {tool_name} not found, skip")
+        
+        # Step 6: Press back to return to project view before next tool
+        adb("shell input keyevent 4")  # BACK key
+        time.sleep(1)
     
     print("\n[+] All NP tools done")
 

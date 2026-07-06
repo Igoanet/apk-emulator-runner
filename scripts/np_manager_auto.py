@@ -84,11 +84,11 @@ def wait_for_boot(max_wait=120):
     return False
 
 def install_apk(apk_path, pkg):
-    if not os.path.exists(apk_path):
+    if not os.path.exists(os.path.expanduser(apk_path)):
         print(f"[!] APK not found: {apk_path}")
         return False
     print(f"[*] Installing {pkg}...")
-    r = adb(f"install -r -d '{apk_path}'", timeout=60)
+    r = adb(f"install -r -d '{os.path.expanduser(apk_path)}'", timeout=60)
     print(f"    {r.stdout[:100]} {r.stderr[:100]}")
     return "Success" in r.stdout or pkg in adb("shell pm list packages").stdout
 

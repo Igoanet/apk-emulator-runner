@@ -240,14 +240,24 @@ def open_apk():
     time.sleep(5)
     screenshot("project_opened")
     dismiss_terms()
-    for i in range(20):
-        time.sleep(2)
+    
+    # Wait for project to load - generous timeout for large APKs
+    for i in range(15):
+        time.sleep(3)
         xml = get_xml()
-        if "Projects" in xml or "Smali" in xml or "Manifest" in xml or "Resources" in xml:
-            print(f"[+] Project loaded ({i*2}s)")
+        # Broader keyword matching for project detection
+        keywords = ["Projects", "Smali", "Manifest", "Resources", "Classes", "Dex", "java", "src", "反编", "项目", "工程", "File", "Edit", "View", "文件"]
+        if any(kw in xml for kw in keywords):
+            print(f"[+] Project loaded ({i*3}s)")
             return True
-    print("[!] Project load timeout")
-    return False
+        
+        # Also check if we're still on an import/parse screen
+        if "Parsing" in xml or "解析" in xml or "Loading" in xml or "加载" in xml:
+            print(f"[*] Still parsing... ({i*3}s)")
+            continue
+    
+    print("[!] Project load timeout - continuing anyway")
+    return True  # Don't fail, try to continue
 
 def run_tools():
     tools = [

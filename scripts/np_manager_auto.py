@@ -263,48 +263,75 @@ def open_apk():
 
 def run_tools():
     tools = [
-        ("Encrypt Resource", ["Encrypt", "Resource", "\u52a0\u5bc6"]),
-        ("Anti-APK Pseudo", ["Anti-APK", "Pseudo", "\u53cd\u4f2a"]),
-        ("RES Anti-VT", ["RES Anti", "Anti-VT", "RES"]),
-        ("Anti-Pseudo Trace", ["Anti-Pseudo", "Pseudo Trace", "\u53cd\u8ffd\u8e2a"]),
-        ("Custom ARSC", ["Custom ARSC", "Customize", "\u81ea\u5b9a\u4e49"]),
-        ("VM Protection", ["VM", "Virtual Machine", "\u865a\u62df\u673a"]),
-        ("Dex2C", ["Dex2C", "Native", "DEX"]),
+        ("Encrypt Resource", ["Encrypt", "Resource", "加密", "加密字符串", "资源加密", "String"]),
+        ("Anti-APK Pseudo", ["Anti-APK", "Pseudo", "反伪", "反伪装", "仿伪", "仿APK"]),
+        ("RES Anti-VT", ["RES Anti", "Anti-VT", "RES", "反VT", "免杀", "免费查杀", "Virus"]),
+        ("Anti-Pseudo Trace", ["Anti-Pseudo", "Pseudo Trace", "反追踪", "反跟踪", "追踪", "Trace"]),
+        ("Custom ARSC", ["Custom ARSC", "Customize", "自定义", "自定义ARSC", "ARSC", "资源文件"]),
+        ("VM Protection", ["VM", "Virtual Machine", "虚拟机", "虚拟机保护", "VMP", "虚拟"]),
+        ("Dex2C", ["Dex2C", "Native", "DEX", "混淆", "代码混淆", "Obfuscate", "Obfuscation"]),
     ]
+    
     for tool_name, keywords in tools:
         print(f"\n[*] === {tool_name} ===")
-        screenshot(f"np_{tool_name.replace(' ','_')[:20]}")
+        screenshot(f"np_{tool_name.replace(' ', '_')[:20]}")
         xml = get_xml()
-        tools_tab = find_text(xml, "Tools") or find_text(xml, "\u5de5\u5177")
-        if tools_tab:
-            adb(f"shell input tap {tools_tab[0]} {tools_tab[1]}")
-        else:
-            tap_rel(0.7, 0.06, "Tools fallback")
-        time.sleep(2)
-        xml = get_xml()
+        
+        # Try multiple navigation patterns to find tools
         tool_tapped = False
+        
+        # Pattern 1: Try "Tools" or "Protection" or "Obfuscate" tab/button
+        nav_buttons = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", "防护", "防护配置"]
+        nav_tapped = False
+        for nav in nav_buttons:
+            if tap_text(xml, nav, f"Nav: {nav}"):
+                nav_tapped = True
+                time.sleep(2)
+                xml = get_xml()  # Refresh XML after tapping
+                break
+        
+        if not nav_tapped:
+            # Try toolbar coordinates (top area of project view)
+            # NP Manager typically has a toolbar with action buttons around y=38-80
+            tap_rel(0.85, 0.08, "Toolbar right")
+            time.sleep(1)
+            xml = get_xml()
+        
+        # Now look for the specific tool
         for kw in keywords:
             if tap_text(xml, kw, f"Tool: {kw}"):
                 tool_tapped = True
                 break
+        
         if not tool_tapped:
+            # Try scrolling down in tools list
+            print(f"[*] Scrolling for {tool_name}...")
+            for _ in range(3):
+                adb("shell input swipe 160 400 160 200 500")  # Scroll down
+                time.sleep(1)
+                xml = get_xml()
+                for kw in keywords:
+                    if tap_text(xml, kw, f"Scroll Tool: {kw}"):
+                        tool_tapped = True
+                        break
+                if tool_tapped:
+                    break
+        
+        if tool_tapped:
+            print(f"[+] {tool_name} tapped")
+            time.sleep(3)
+            # Try to apply/confirm the tool
+            apply_xml = get_xml()
+            apply_buttons = ["OK", "Apply", "确定", "应用", "开始", "Start", "运行", "Run", "生成", "Generate"]
+            for btn in apply_buttons:
+                if tap_text(apply_xml, btn, f"Apply: {btn}"):
+                    time.sleep(5)
+                    break
+        else:
             print(f"[!] {tool_name} not found, skip")
-            back()
-            continue
-        time.sleep(12)
-        screenshot(f"after_{tool_name.replace(' ','_')[:20]}")
-        dismiss_terms()
-        xml = get_xml()
-        (
-            tap_text(xml, "Save", "Save") or tap_text(xml, "\u4fdd\u5b58", "Save") or
-            tap_text(xml, "Apply", "Apply") or tap_text(xml, "OK", "OK") or
-            tap_rel(0.5, 0.92, "Save fallback")
-        )
-        time.sleep(3)
-        back()
-        time.sleep(1)
+    
     print("\n[+] All NP tools done")
-    return True
+
 
 def save_output():
     print("[*] Saving output...")

@@ -258,28 +258,50 @@ def open_apk():
         return False
     adb(f"push '{os.path.expanduser(INPUT_APK)}' /sdcard/Download/input.apk")
     time.sleep(1)
+    
+    # Launch APK - this may trigger "Open with" chooser dialog
+    print("[*] Launching APK via VIEW intent...")
     adb("shell am start -a android.intent.action.VIEW -d file:///sdcard/Download/input.apk -t application/vnd.android.package-archive")
     time.sleep(5)
     screenshot("project_opened")
+    
+    # Handle "Open with" chooser dialog if it appears
+    xml = get_xml()
+    if "Open with" in xml or "Open" in xml:
+        print("[*] Handling 'Open with' chooser dialog...")
+        # Tap "NP Manager" in the list
+        if tap_text(xml, "NP Manager", "Choose NP Manager"):
+            time.sleep(1)
+        # Tap "Always" to always open with NP Manager
+        xml = get_xml()
+        if tap_text(xml, "Always", "Always open with NP Manager"):
+            time.sleep(3)
+        elif tap_text(xml, "Just once", "Just once"):
+            time.sleep(3)
+    
+    # Handle any terms dialogs that appear
     dismiss_terms()
     
-    # Wait for project to load - generous timeout for large APKs
+    # Wait for project to load in NP Manager
+    print("[*] Waiting for project to load...")
     for i in range(15):
         time.sleep(3)
         xml = get_xml()
-        # Broader keyword matching for project detection
-        keywords = ["Projects", "Smali", "Manifest", "Resources", "Classes", "Dex", "java", "src", "反编", "项目", "工程", "File", "Edit", "View", "文件"]
+        keywords = ["Projects", "Smali", "Manifest", "Resources", "Classes", "Dex", "java", "src", 
+                   "反编", "项目", "工程", "File", "Edit", "View", "文件", 
+                   "编辑", "查看"]
         if any(kw in xml for kw in keywords):
             print(f"[+] Project loaded ({i*3}s)")
             return True
         
-        # Also check if we're still on an import/parse screen
+        # Check if still parsing
         if "Parsing" in xml or "解析" in xml or "Loading" in xml or "加载" in xml:
             print(f"[*] Still parsing... ({i*3}s)")
             continue
     
     print("[!] Project load timeout - continuing anyway")
     return True  # Don't fail, try to continue
+
 
 def run_tools():
     tools = [

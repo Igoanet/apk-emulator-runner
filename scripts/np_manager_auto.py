@@ -304,104 +304,84 @@ def open_apk():
 
 
 def run_tools():
-    tools = [
-        ("Encrypt Resource", ["Encrypt", "Resource", "加密", "加密字符串", "资源加密", "String"]),
-        ("Anti-APK Pseudo", ["Anti-APK", "Pseudo", "反伪", "反伪装", "仿伪", "仿APK"]),
-        ("RES Anti-VT", ["RES Anti", "Anti-VT", "RES", "反VT", "免杀", "免费查杀", "Virus"]),
-        ("Anti-Pseudo Trace", ["Anti-Pseudo", "Pseudo Trace", "反追踪", "反跟踪", "追踪", "Trace"]),
-        ("Custom ARSC", ["Custom ARSC", "Customize", "自定义", "自定义ARSC", "ARSC", "资源文件"]),
-        ("VM Protection", ["VM", "Virtual Machine", "虚拟机", "虚拟机保护", "VMP", "虚拟"]),
-        ("Dex2C", ["Dex2C", "Native", "DEX", "混淆", "代码混淆", "Obfuscate", "Obfuscation"]),
+    # NP Manager Premium tools - try to find and apply whatever is available
+    all_tool_keywords = [
+        "加密", "反伪", "反VT", "反追踪", "自定义", "虚拟机", "混淆",
+        "Encrypt", "Anti", "VM", "Dex2C", "Custom", "Protection", "Obfuscate",
+        "String", "Resource", "Native", "Signature", "Manifest", "Debug",
+        "签名", "资源", "字符串", "本地化", "加巡", "检测",
     ]
     
-    # First, dump all UI text for debugging
-    print("[*] Dumping project view UI elements...")
-    xml = get_xml()
-    all_text = list_all_text(xml, 30)
-    for val, attr in all_text:
-        print(f"    [{attr}] {val}")
+    apply_keywords = ["OK", "Apply", "确定", "应用", "开始", "Start", 
+                     "运行", "Run", "生成", "Generate", "确认", "处理"]
     
-    # Try to access tools menu
-    print("[*] Trying MENU key for tools menu...")
+    # Try multiple ways to access tools
+    print("[*] Attempting to access NP Manager tools...")
+    
+    # Method 1: Try MENU key
     adb("shell input keyevent 82")
     time.sleep(2)
     xml = get_xml()
-    screenshot("np_menu_attempt")
+    screenshot("np_after_menu")
     
-    menu_keywords = ["Tools", "工具", "Protection", "保护", "Obfuscate", "混淆", 
-                    "防护", "防护配置", "功能", "Functions", "功能列表"]
-    menu_opened = False
-    for kw in menu_keywords:
-        if tap_text(xml, kw, f"Menu: {kw}"):
-            menu_opened = True
-            time.sleep(2)
-            break
-    
-    if not menu_opened:
-        print("[*] No menu found with MENU key, trying toolbar taps...")
-        # Try multiple toolbar positions
-        for rx, ry in [(0.92, 0.08), (0.85, 0.08), (0.80, 0.06), (0.90, 0.06), (0.95, 0.10)]:
-            tap_rel(rx, ry, f"Toolbar {rx},{ry}")
-            time.sleep(2)
-            xml = get_xml()
-            for kw in menu_keywords:
-                if find_text(xml, kw):
-                    tap_text(xml, kw, f"MenuTap: {kw}")
-                    menu_opened = True
-                    time.sleep(2)
-                    break
-            if menu_opened:
-                break
-    
-    if not menu_opened:
-        print("[!] Could not open tools menu, trying direct tool search...")
-    
-    for tool_name, keywords in tools:
-        print(f"\n[*] === {tool_name} ===")
-        screenshot(f"np_{tool_name.replace(' ', '_')[:20]}")
-        xml = get_xml()
-        
-        # Search for tool
-        tool_tapped = False
-        for kw in keywords:
-            if tap_text(xml, kw, f"Tool: {kw}"):
-                tool_tapped = True
-                break
-        
-        # If not found, try scrolling
-        if not tool_tapped:
-            print(f"[*] Scrolling for {tool_name}...")
-            for scroll_i in range(5):
-                adb("shell input swipe 160 400 160 200 500")
-                time.sleep(1.5)
-                xml = get_xml()
-                for kw in keywords:
-                    if tap_text(xml, kw, f"Scroll: {kw}"):
-                        tool_tapped = True
-                        break
-                if tool_tapped:
-                    break
-        
-        if tool_tapped:
-            print(f"[+] {tool_name} tapped")
-            time.sleep(3)
-            # Try to apply
-            apply_xml = get_xml()
-            apply_btns = ["OK", "Apply", "确定", "应用", "开始", "Start", 
-                         "运行", "Run", "生成", "Generate", "Confirm", "确认", 
-                         "继续", "Continue", "处理", "Process"]
-            for btn in apply_btns:
-                if tap_text(apply_xml, btn, f"Apply: {btn}"):
-                    time.sleep(5)
-                    break
-        else:
-            print(f"[!] {tool_name} not found, skip")
-        
-        # Press back to return to project view
-        adb("shell input keyevent 4")
+    # Method 2: Try tapping bottom-right area for FAB or action buttons  
+    for rx, ry in [(0.90, 0.90), (0.85, 0.85), (0.92, 0.88)]:
+        tap_rel(rx, ry, f"FAB try {rx},{ry}")
         time.sleep(1)
     
-    print("\n[+] All NP tools done")
+    # Method 3: Try common toolbar positions
+    for rx, ry in [(0.95, 0.06), (0.90, 0.08), (0.85, 0.06)]:
+        tap_rel(rx, ry, f"Toolbar {rx},{ry}")
+        time.sleep(1.5)
+        xml = get_xml()
+        # Check if any tool keyword appeared
+        found_tools = [kw for kw in all_tool_keywords if find_text(xml, kw)]
+        if found_tools:
+            print(f"[+] Found tools after toolbar tap: {found_tools}")
+            break
+    
+    # Method 4: Try looking for a list view and scrolling through it
+    print("[*] Trying to scroll project view for tools...")
+    for scroll_i in range(8):
+        xml = get_xml()
+        found = False
+        for kw in all_tool_keywords:
+            if tap_text(xml, kw, f"Found: {kw}"):
+                print(f"[+] Tapped tool: {kw}")
+                time.sleep(3)
+                # Try to apply
+                apply_xml = get_xml()
+                for btn in apply_keywords:
+                    if tap_text(apply_xml, btn, f"Apply: {btn}"):
+                        time.sleep(5)
+                        break
+                found = True
+                break
+        
+        if not found:
+            # Try scrolling - use larger swipe distance
+            adb("shell input swipe 160 500 160 100 800")
+            time.sleep(2)
+        else:
+            # Go back to project view for next tool
+            adb("shell input keyevent 4")
+            time.sleep(1.5)
+    
+    print("\n[*] Tool search complete")
+    
+    # Also try to find any batch/protect-all option
+    xml = get_xml()
+    batch_keywords = ["Protect", "保护", "Obfuscate", "混淆", "All", "全部", "Batch", "批量"]
+    for kw in batch_keywords:
+        if tap_text(xml, kw, f"Batch: {kw}"):
+            print(f"[+] Found batch option: {kw}")
+            time.sleep(3)
+            apply_xml = get_xml()
+            for btn in apply_keywords:
+                if tap_text(apply_xml, btn, f"Apply batch: {btn}"):
+                    time.sleep(10)
+                    break
+            break
 
 
 def save_output():

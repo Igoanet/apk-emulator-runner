@@ -51,7 +51,9 @@ jobs:
 
       - name: Download APK Tools from VPS
         run: |
-          mkdir -p ~/apk-tools ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
+          # Pre-warm ADB daemon
+adb start-server 2>/dev/null || true
+mkdir -p ~/apk-tools ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
           curl -sf "http://13.60.208.8/input/np_manager.apk" -o ~/apk-tools/np_manager.apk || echo "NP Manager not on VPS"
           curl -sf "http://13.60.208.8/input/mt_manager.apk" -o ~/apk-tools/mt_manager.apk || echo "MT Manager not on VPS"
           curl -sf "http://13.60.208.8/input/apktool_m.apk" -o ~/apk-tools/apktool_m.apk || echo "APKTool M not on VPS"
@@ -65,8 +67,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           APK_URL: ${{ github.event.inputs.apk_url }}
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 33
+          target: default
           arch: x86_64
           cores: 4
           ram-size: 8192M

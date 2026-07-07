@@ -296,52 +296,76 @@ def find_any_bounds(xml):
     return results
 
 def nav_to_path_in_browser(target_path):
-    """Use NP Manager's path bar to navigate directly to a folder path.
+    """Use NP Manager's 'Jump to Path' dialog to navigate directly to a folder.
     
-    NP Manager path bar workflow:
-    1. Tap path bar (shows current path like /storage/emulated/0)
-    2. A 'Jump to Path' dialog opens with editable text field
-    3. Clear, type new path, tap CONFIRM
+    Workflow:
+    1. Tap path bar (shows /storage/emulated/0) -> opens 'Jump to Path' dialog
+    2. Dialog has: title 'Jump to Path', text field with current path, CANCEL, CONFIRM buttons
+    3. Tap text field, select all, type new path, then tap CONFIRM by its actual coordinates
     """
     xml = get_xml()
     nodes = find_any_bounds(xml)
-    # Find path bar node (shows current directory path)
-    path_node = next(((cx, cy) for txt, cx, cy in nodes if "/storage" in txt or "/sdcard" in txt), None)
-    if path_node:
-        adb(f"shell input tap {path_node[0]} {path_node[1]}")
-        time.sleep(1.5)
-        # "Jump to Path" dialog should now be open with a text field
-        xml2 = get_xml()
-        nodes2 = find_any_bounds(xml2)
-        print(f"[NAV_DIALOG] {[n for n in nodes2 if n[0].strip()]}")
-        # Tap the text field (it contains the current path text) to focus it
-        path_field = next(((cx, cy) for txt, cx, cy in nodes2 if "/storage" in txt or "/sdcard" in txt), None)
-        if path_field:
-            adb(f"shell input tap {path_field[0]} {path_field[1]}")
-            time.sleep(0.5)
-        # Select all + clear existing text
-        adb("shell input keyevent KEYCODE_CTRL_A")
-        time.sleep(0.3)
-        adb("shell input keyevent KEYCODE_DEL")
-        time.sleep(0.3)
-        # Type new target path
-        adb(f"shell input text '{target_path}'")
-        time.sleep(0.5)
-        # Tap CONFIRM button to navigate
-        xml3 = get_xml()
-        if tap_text(xml3, "CONFIRM", "Jump to Path CONFIRM") or tap_text(xml3, "Confirm", "Confirm"):
-            time.sleep(2)
-            print(f"[NAV] Navigated to {target_path} via CONFIRM")
-            return True
-        else:
-            # Fallback: press Enter
-            adb("shell input keyevent 66")
-            time.sleep(2)
-            print(f"[NAV] Navigated to {target_path} via Enter")
-            return True
-    else:
-        print(f"[NAV] No path bar found. Nodes: {[t for t,x,y in nodes if t.strip()][:10]}")
+    # Find path bar node — the one showing /storage/emulated/0
+    path_node = next(((cx, cy) for txt, cx, cy in nodes if "/storage" in txt or ("/sdcard" in txt and "Android" not in txt)), None)
+    if not path_node:
+        print(f"[NAV] No path bar. Nodes: {[t for t,x,y in nodes if t.strip()][:10]}")
         return False
+
+    adb(f"shell input tap {path_node[0]} {path_node[1]}")
+    time.sleep(1.5)
+
+    # Read the dialog that just opened
+    xml2 = get_xml()
+    nodes2 = find_any_bounds(xml2)
+    print(f"[NAV_DIALOG] {[n for n in nodes2 if n[0].strip()]}")
+
+    # Check "Jump to Path" dialog is open
+    if "Jump to Path" not in xml2:
+        print("[NAV] 'Jump to Path' dialog not found")
+        return False
+
+    # Find CONFIRM button coordinates from THIS xml (before typing)
+    confirm_pos = next(((cx, cy) for txt, cx, cy in nodes2 if txt == "CONFIRM"), None)
+    print(f"[NAV_CONFIRM_POS] {confirm_pos}")
+
+    # Tap the text field to focus it (it contains current path text)
+    path_field_pos = next(((cx, cy) for txt, cx, cy in nodes2 if "/storage" in txt or "/sdcard" in txt), None)
+    if path_field_pos:
+        adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
+        time.sleep(0.5)
+    # Triple-tap to select all text in field
+    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
+    time.sleep(0.1)
+    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
+    time.sleep(0.1)
+    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
+    time.sleep(0.3)
+    # Select all and delete
+    adb("shell input keyevent KEYCODE_CTRL_A")
+    time.sleep(0.2)
+    adb("shell input keyevent KEYCODE_DEL")
+    time.sleep(0.2)
+    # Type target path
+    adb(f"shell input text '{target_path}'")
+    time.sleep(0.5)
+
+    # Tap CONFIRM using coordinates captured BEFORE typing (keyboard won't shift dialog)
+    if confirm_pos:
+        adb(f"shell input tap {confirm_pos[0]} {confirm_pos[1]}")
+        print(f"[NAV] Tapped CONFIRM @ {confirm_pos}")
+        time.sleep(2)
+    else:
+        # Fallback: press Enter
+        adb("shell input keyevent 66")
+        print("[NAV] Pressed Enter (no CONFIRM found)")
+        time.sleep(2)
+
+    # Check where we ended up
+    xml3 = get_xml()
+    nodes3 = find_any_bounds(xml3)
+    curr = next((t for t,x,y in nodes3 if "/storage" in t or "/sdcard" in t), "unknown")
+    print(f"[NAV_RESULT] Now at: {curr}")
+    return True
 
 
 def open_apk():

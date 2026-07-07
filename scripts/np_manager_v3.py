@@ -627,32 +627,66 @@ def open_apk():
                     email_node = (x, y)
                     print(f"[RELOGIN_EMAIL_FIELD] found at ({x},{y}): {t[:40]}")
                     break
-            # Identify password field: placeholder text
+            # Identify password field: placeholder "Please enter a password" (not "Forgot password")
             pass_node = None
             for t, x, y in all_nodes:
-                if "password" in t.lower() and x > 400:
+                if "please enter a password" in t.lower():
                     pass_node = (x, y)
                     print(f"[RELOGIN_PASS_FIELD] found at ({x},{y}): {t[:40]}")
                     break
-            # Identify LOGIN button
+            if not pass_node:
+                # Fallback: any "password" node that's not "Forgot"
+                for t, x, y in all_nodes:
+                    if "password" in t.lower() and "forgot" not in t.lower() and x > 400:
+                        pass_node = (x, y)
+                        print(f"[RELOGIN_PASS_FIELD] fallback at ({x},{y}): {t[:40]}")
+                        break
+            # Identify LOGIN button — must be exactly "LOGIN" (uppercase, not title "login")
             login_node = None
             for t, x, y in all_nodes:
-                if t.strip().upper() == "LOGIN":
+                if t.strip() == "LOGIN":  # exact uppercase match — not the title "login"
                     login_node = (x, y)
                     break
+            if not login_node:
+                # fallback: any node whose text is all caps LOGIN
+                for t, x, y in all_nodes:
+                    if t.strip().upper() == "LOGIN" and t.strip() != "login":
+                        login_node = (x, y)
+                        break
+            print(f"[RELOGIN_LOGIN_NODE] {login_node}")
             # Clear and fill email
             ex, ey = email_node if email_node else (540, 936)
             clear_text_field_and_type(ex, ey, EMAIL)
-            time.sleep(1)
+            time.sleep(1.5)
+            # Dismiss keyboard before tapping password field
+            adb("shell input keyevent KEYCODE_BACK")
+            time.sleep(0.5)
+            # Verify email field and show intermediate state
+            xml_mid = get_xml()
+            nodes_mid = find_any_bounds(xml_mid)
+            print(f"[RELOGIN_MID] {[n for n in nodes_mid if n[0].strip()][:8]}")
+            # Re-find password field in fresh XML (positions may shift)
+            for t2, x2, y2 in nodes_mid:
+                if "please enter a password" in t2.lower():
+                    pass_node = (x2, y2)
+                    print(f"[RELOGIN_PASS_REFOUND] ({x2},{y2}): {t2[:30]}")
+                    break
             # Clear and fill password
             px, py = pass_node if pass_node else (540, 1096)
             clear_text_field_and_type(px, py, PASSWORD)
-            time.sleep(1)
+            time.sleep(1.5)
+            # Dismiss keyboard
+            adb("shell input keyevent KEYCODE_BACK")
+            time.sleep(0.5)
+            # Re-read XML to find LOGIN button in final state
+            xml_final = get_xml()
+            nodes_final2 = find_any_bounds(xml_final)
+            print(f"[RELOGIN_BEFORE_LOGIN] {[n for n in nodes_final2 if n[0].strip()][:10]}")
             # Tap LOGIN
             lx, ly = login_node if login_node else (540, 1302)
             print(f"[RELOGIN_LOGIN_BTN] tapping LOGIN @ ({lx},{ly})")
             adb(f"shell input tap {lx} {ly}")
-            time.sleep(6)
+            time.sleep(8)
             relogin_done = True
             screenshot("after_relogin")
             xml = get_xml(save_as="relogin_state")

@@ -106,20 +106,33 @@ def dismiss_all_dialogs(max_attempts=10):
         xml = get_xml()
         dismissed = False
 
-        # System ANR dialogs: "isn't responding" -> tap "Wait" to keep app alive
+        # System ANR dialogs: "isn't responding"
+        # For Pixel Launcher: tap "Close app" (we don't need it, and "Wait" keeps ANR alive forever)
+        # For NP Manager: tap "Wait" to keep it alive
         if "isn't responding" in xml or "not responding" in xml.lower():
             print(f"[*] ANR dialog detected (attempt {i+1})")
-            if tap_text(xml, "Wait", "ANR: Wait"):
-                time.sleep(2)
-                dismissed = True
-            elif tap_text(xml, "Close app", "ANR: Close app"):
-                time.sleep(2)
-                dismissed = True
+            anr_title = next((t for t,x,y in find_any_bounds(xml) if "isn't responding" in t or "not responding" in t.lower()), "")
+            print(f"[ANR_TITLE] {anr_title[:60]}")
+            if "pixel launcher" in anr_title.lower() or ("launcher" in anr_title.lower() and "np" not in anr_title.lower()):
+                print("[ANR] Pixel Launcher — closing it")
+                if tap_text(xml, "Close app", "ANR: Close Pixel Launcher"):
+                    time.sleep(2)
+                    dismissed = True
+                else:
+                    adb("shell input keyevent 4")
+                    time.sleep(1)
+                    dismissed = True
             else:
-                # Fallback: press Back
-                adb("shell input keyevent 4")
-                time.sleep(1)
-                dismissed = True
+                if tap_text(xml, "Wait", "ANR: Wait"):
+                    time.sleep(2)
+                    dismissed = True
+                elif tap_text(xml, "Close app", "ANR: Close app"):
+                    time.sleep(2)
+                    dismissed = True
+                else:
+                    adb("shell input keyevent 4")
+                    time.sleep(1)
+                    dismissed = True
 
         if not dismissed:
             # Update dialog: "WAIT UNTIL LATER" / "UPDATE IMMEDIATELY" / "COPY URL"
@@ -489,11 +502,21 @@ def open_apk():
     adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
     time.sleep(8)
 
-    # Aggressively clear ALL ANR/dialogs — System UI ANR can persist for a while
-    for _ in range(10):
+    # Aggressively clear ALL ANR/dialogs — System UI / Pixel Launcher ANR can persist
+    # For Pixel Launcher ANR: tap "Close app" (kills it cleanly; we don't need it).
+    # For NP Manager ANR: tap "Wait" to keep it alive.
+    for _ in range(15):
         xml_anr = get_xml()
         if "isn't responding" in xml_anr or "not responding" in xml_anr.lower():
-            tap_text(xml_anr, "Wait", "ANR aggressive dismiss")
+            nodes_anr = find_any_bounds(xml_anr)
+            # Determine which app is ANR-ing
+            anr_title = next((t for t,x,y in nodes_anr if "isn't responding" in t or "not responding" in t.lower()), "")
+            if "pixel launcher" in anr_title.lower() or "launcher" in anr_title.lower():
+                # Kill Pixel Launcher — we don't need it
+                tap_text(xml_anr, "Close app", "Pixel Launcher ANR close")
+                print(f"[ANR] Closed Pixel Launcher")
+            else:
+                tap_text(xml_anr, "Wait", "ANR aggressive dismiss")
             time.sleep(2)
         else:
             break
@@ -511,10 +534,17 @@ def open_apk():
     nav_ok = False
     for nav_attempt in range(3):
         # Clear any lingering ANRs before each attempt
-        for _ in range(5):
+        # For Pixel Launcher ANR: close it; for NP Manager ANR: wait
+        for _ in range(8):
             xml_chk = get_xml()
             if "isn't responding" in xml_chk or "not responding" in xml_chk.lower():
-                tap_text(xml_chk, "Wait", f"ANR pre-nav attempt {nav_attempt}")
+                nodes_chk = find_any_bounds(xml_chk)
+                anr_title_chk = next((t for t,x,y in nodes_chk if "isn't responding" in t or "not responding" in t.lower()), "")
+                if "pixel launcher" in anr_title_chk.lower() or "launcher" in anr_title_chk.lower():
+                    tap_text(xml_chk, "Close app", f"Pixel Launcher ANR pre-nav {nav_attempt}")
+                    print(f"[ANR] Closed Pixel Launcher pre-nav")
+                else:
+                    tap_text(xml_chk, "Wait", f"ANR pre-nav attempt {nav_attempt}")
                 time.sleep(2)
             else:
                 break
@@ -600,8 +630,14 @@ def open_apk():
         time.sleep(2)
         xml = get_xml()
         # Dismiss any ANR that reappears
-        if "isn't responding" in xml:
-            tap_text(xml, "Wait", "ANR Wait loop")
+        if "isn't responding" in xml or "not responding" in xml.lower():
+            nodes_anr_w = find_any_bounds(xml)
+            anr_title_w = next((t for t,x,y in nodes_anr_w if "isn't responding" in t or "not responding" in t.lower()), "")
+            if "pixel launcher" in anr_title_w.lower() or "launcher" in anr_title_w.lower():
+                tap_text(xml, "Close app", "Pixel Launcher ANR wait loop")
+                print("[ANR] Closed Pixel Launcher in wait loop")
+            else:
+                tap_text(xml, "Wait", "ANR Wait loop")
             time.sleep(1)
             continue
         if is_project_loaded(xml):

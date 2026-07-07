@@ -36,10 +36,18 @@ def get_screen():
     m = re.search(r'(\d+)x(\d+)', size)
     return (int(m.group(1)), int(m.group(2))) if m else (1080, 1920)
 
-def get_xml():
+def get_xml(save_as=None):
     adb("shell uiautomator dump /sdcard/window_dump.xml")
     r = adb("shell cat /sdcard/window_dump.xml")
-    return r.stdout
+    xml = r.stdout
+    if save_as:
+        path = os.path.join(SCREENSHOT_DIR, f"{save_as}.xml")
+        os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+        with open(path, "w") as f:
+            f.write(xml)
+        # Also print first 2000 chars so it shows in GH Actions logs
+        print(f"[XML:{save_as}] {xml[:2000]}")
+    return xml
 
 def find_text(xml, text):
     pat = re.compile(r'<node[^>]*text="' + re.escape(text) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"')
@@ -229,84 +237,177 @@ def handle_login():
     print("[+] Login done")
     return True
 
+PROJECT_KEYWORDS = ["Smali", "Manifest", "Resources", "AndroidManifest", "classes.dex",
+                    "smali", "manifest", "res/", "META-INF"]
+
+def is_project_loaded(xml):
+    return any(kw in xml for kw in PROJECT_KEYWORDS)
+
+def find_any_bounds(xml):
+    """Return all (text, cx, cy) tuples from clickable nodes."""
+    results = []
+    for m in re.finditer(r'<node[^>]*text="([^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', xml):
+        txt = m.group(1)
+        cx = (int(m.group(2)) + int(m.group(4))) // 2
+        cy = (int(m.group(3)) + int(m.group(5))) // 2
+        results.append((txt, cx, cy))
+    return results
+
 def open_apk():
-    print("[*] Opening APK via NP Manager file browser...")
+    print("[*] Opening APK via NP Manager...")
     if not os.path.exists(os.path.expanduser(INPUT_APK)):
         print("[!] Input APK missing")
         return False
 
-    # Push APK to sdcard
+    # Push APK to emulator
     adb(f"push '{INPUT_APK}' /sdcard/Download/input.apk")
     time.sleep(1)
+    # Also make it discoverable via media scan
+    adb("shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE "
+        "-d file:///sdcard/Download/input.apk")
     print("[*] APK pushed to /sdcard/Download/input.apk")
 
-    # Make sure NP Manager is in foreground (launch main activity)
-    adb(f"shell am start -n {NP_PACKAGE}/{NP_PACKAGE}.MainActivity")
-    time.sleep(4)
+    # Re-launch NP Manager fresh
+    adb(f"shell am force-stop {NP_PACKAGE}")
+    time.sleep(1)
+    adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
+    time.sleep(5)
     dismiss_terms()
     screenshot("np_main_screen")
+    xml = get_xml(save_as="01_after_login")
 
-    # Check if already on project/file list — try clicking "+" or "Open" or folder icon
-    xml = get_xml()
+    print(f"[NODES] {find_any_bounds(xml)[:20]}")
 
-    # Try: tap the "+" FAB button (new project / open APK)
-    plus = find_text(xml, "+") or find_text(xml, "Open") or find_text(xml, "New")
-    if plus:
-        adb(f"shell input tap {plus[0]} {plus[1]}")
-        print(f"[*] Tapped Open/+ @ {plus}")
+    # --- Strategy 1: Find "+" FAB or any open/folder button ---
+    # Look for common open-project buttons by text
+    open_texts = ["+", "Open", "New", "Add", "Import", "Folder", "File",
+                  "\u6253\u5f00", "\u65b0\u5efa", "\u6dfb\u52a0"]
+    tapped = False
+    for txt in open_texts:
+        c = find_text(xml, txt)
+        if c:
+            adb(f"shell input tap {c[0]} {c[1]}")
+            print(f"[S1] Tapped '{txt}' @ {c}")
+            tapped = True
+            time.sleep(2)
+            break
+
+    # If nothing found by text, tap FAB area (bottom-right, typical Material FAB)
+    if not tapped:
+        w, h = get_screen()
+        adb(f"shell input tap {int(w*0.87)} {int(h*0.88)}")
+        print(f"[S1] Tapped FAB area @ ({int(w*0.87)},{int(h*0.88)})")
         time.sleep(2)
-        screenshot("after_plus")
-        xml = get_xml()
 
-    # If file chooser appeared, navigate to Download folder
-    if "Download" in xml or "sdcard" in xml or "Files" in xml:
-        if tap_text(xml, "Download", "Download folder"):
-            time.sleep(1)
-        xml = get_xml()
+    screenshot("after_s1_tap")
+    xml = get_xml(save_as="02_after_s1")
+    print(f"[NODES2] {find_any_bounds(xml)[:20]}")
 
-    # Look for input.apk in file list
-    if tap_text(xml, "input.apk", "input.apk"):
-        print("[*] Tapped input.apk")
+    # Check if project already loaded
+    if is_project_loaded(xml):
+        print("[+] Project loaded after S1!")
+        return True
+
+    # --- Strategy 2: File browser navigation ---
+    # Look for Download folder or input.apk in any file picker
+    for nav_text in ["Download", "input.apk", "input", "sdcard", "Storage", "Files"]:
+        if tap_text(xml, nav_text, f"Nav: {nav_text}"):
+            time.sleep(2)
+            xml = get_xml()
+            if is_project_loaded(xml):
+                print(f"[+] Project loaded after tapping '{nav_text}'!")
+                return True
+            break
+
+    # --- Strategy 3: Direct file URI intent methods ---
+    print("[S3] Trying direct file open intents...")
+
+    # Method A: file URI directly to NP Manager
+    adb(f'shell am start -n {NP_PACKAGE}/{NP_PACKAGE}.MainActivity '
+        f'--es file /sdcard/Download/input.apk')
+    time.sleep(5)
+    xml = get_xml(save_as="03_after_es_intent")
+    if is_project_loaded(xml):
+        print("[+] Project loaded via --es file intent!")
+        return True
+
+    # Method B: ACTION_VIEW with explicit package
+    adb(f'shell am start -a android.intent.action.VIEW '
+        f'-d file:///sdcard/Download/input.apk '
+        f'-t application/vnd.android.package-archive '
+        f'--activity-no-history '
+        f'-n {NP_PACKAGE}/{NP_PACKAGE}.MainActivity')
+    time.sleep(5)
+    xml = get_xml(save_as="04_after_view_intent")
+    dismiss_terms()
+    if is_project_loaded(xml):
+        print("[+] Project loaded via ACTION_VIEW!")
+        return True
+
+    # Method C: Try all activity names that might handle file open
+    for activity in ["MainActivity", "ProjectActivity", "EditorActivity",
+                     "OpenActivity", "FileActivity", "HomeActivity"]:
+        r = adb(f'shell am start -n {NP_PACKAGE}/{NP_PACKAGE}.{activity} '
+                f'--es filepath /sdcard/Download/input.apk')
+        if "does not exist" not in r.stderr and "Error" not in r.stderr:
+            print(f"[S3C] Tried {activity}: {r.stderr[:80] or r.stdout[:80]}")
+            time.sleep(3)
+            xml = get_xml()
+            if is_project_loaded(xml):
+                print(f"[+] Project loaded via {activity}!")
+                return True
+
+    # --- Strategy 4: Scan current XML for any APK-related or folder items ---
+    screenshot("np_s4")
+    xml = get_xml(save_as="05_before_s4")
+    nodes = find_any_bounds(xml)
+    print(f"[S4] All nodes: {nodes}")
+
+    # Tap anything that looks like a file/folder
+    for txt, cx, cy in nodes:
+        if any(kw in txt.lower() for kw in ["apk", "file", "open", "folder", "import", "project"]):
+            adb(f"shell input tap {cx} {cy}")
+            print(f"[S4] Tapped '{txt}' @ ({cx},{cy})")
+            time.sleep(3)
+            xml = get_xml()
+            if is_project_loaded(xml):
+                print("[+] Project loaded via S4!")
+                return True
+
+    # --- Strategy 5: Use adb shell content provider to MediaStore ---
+    print("[S5] Trying MediaStore content URI...")
+    r = adb("shell content query --uri content://media/external/file "
+            "--projection _id:_data "
+            "--where \"_data='/sdcard/Download/input.apk'\"")
+    print(f"[S5] MediaStore: {r.stdout[:200]}")
+    media_id = None
+    m = re.search(r'_id=(\d+)', r.stdout)
+    if m:
+        media_id = m.group(1)
+        adb(f'shell am start -a android.intent.action.VIEW '
+            f'-d content://media/external/file/{media_id} '
+            f'-t application/vnd.android.package-archive '
+            f'-p {NP_PACKAGE}')
         time.sleep(5)
-        dismiss_terms()
-    else:
-        # Fallback: use NP Manager's open-from-path intent (internal)
-        print("[*] Fallback: open via NP internal intent")
-        adb(f'shell am start -n {NP_PACKAGE}/{NP_PACKAGE}.MainActivity '
-            f'-e "file" "/sdcard/Download/input.apk"')
-        time.sleep(5)
-        dismiss_terms()
-
-    screenshot("project_opened")
-
-    # Wait up to 40s for project to load
-    for i in range(20):
-        time.sleep(2)
-        xml = get_xml()
-        if any(kw in xml for kw in ["Projects", "Smali", "Manifest", "Resources", "AndroidManifest", "classes"]):
-            print(f"[+] Project loaded ({i*2}s)")
+        xml = get_xml(save_as="06_after_media_uri")
+        if is_project_loaded(xml):
+            print("[+] Project loaded via MediaStore URI!")
             return True
-        # Check if file picker still showing — try tapping input.apk again
+
+    # --- Final wait loop ---
+    print("[*] Final wait loop 30s...")
+    for i in range(15):
+        time.sleep(2)
+        xml = get_xml()
+        if is_project_loaded(xml):
+            print(f"[+] Project loaded in final wait ({i*2}s)")
+            return True
         if "input.apk" in xml:
             tap_text(xml, "input.apk", "input.apk retry")
-            time.sleep(3)
-
-    # Last resort: long-press on the APK in file manager to open with NP
-    print("[*] Last resort: open APK with file manager share")
-    adb("shell am start -a android.intent.action.VIEW "
-        "-d content://media/external/file/1 "
-        f"-t application/vnd.android.package-archive "
-        f"-p {NP_PACKAGE}")
-    time.sleep(5)
-    for i in range(10):
-        time.sleep(2)
-        xml = get_xml()
-        if any(kw in xml for kw in ["Smali", "Manifest", "Resources", "AndroidManifest"]):
-            print(f"[+] Project loaded via last resort ({i*2}s)")
-            return True
 
     print("[!] Project load timeout")
     screenshot("load_timeout")
+    xml = get_xml(save_as="07_timeout")
     return False
 
 def run_tools():

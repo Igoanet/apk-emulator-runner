@@ -567,8 +567,11 @@ def open_apk():
             print(f"[!] No known dialog option found after tap. Will wait for editor...")
 
     # Step 3: Wait for project editor/decompile UI to load (up to 120s)
-    # NP Manager decompiles the APK which takes 20-60s on the emulator
+    # NP Manager decompiles the APK which takes 20-60s on the emulator.
+    # IMPORTANT: Tapping FUNCTION may kick back to the login screen (session re-check).
+    # Detect this and re-login, then we'll end up in the FUNCTION/tools view.
     print("[*] Waiting for project editor...")
+    relogin_done = False
     for i in range(60):
         time.sleep(2)
         xml = get_xml()
@@ -582,8 +585,35 @@ def open_apk():
             return True
         nodes_w = find_any_bounds(xml)
         visible = [n for n in nodes_w if n[0].strip()]
+        texts = [t for t,x,y in visible]
         if i % 5 == 0:
             print(f"[WAIT_{i*2}s] {visible[:12]}")
+
+        # Detect login screen shown by FUNCTION's session check and re-login
+        if not relogin_done and ("LOGIN" in texts or "login" in texts) and "Please enter" in " ".join(texts):
+            print("[*] FUNCTION triggered login re-check — re-logging in...")
+            # Enter credentials
+            email_field = find_text(xml, "Please enter your account number/email address")
+            pass_field  = find_text(xml, "Please enter a password")
+            if email_field:
+                adb(f"shell input tap {email_field[0]} {email_field[1]}")
+                time.sleep(0.5)
+                adb(f"shell input text '{EMAIL}'")
+                time.sleep(0.5)
+            if pass_field:
+                adb(f"shell input tap {pass_field[0]} {pass_field[1]}")
+                time.sleep(0.5)
+                adb(f"shell input text '{PASSWORD}'")
+                time.sleep(0.5)
+            tap_text(xml, "LOGIN", "Re-login LOGIN btn")
+            time.sleep(5)
+            relogin_done = True
+            screenshot("after_relogin")
+            xml = get_xml(save_as="relogin_state")
+            nodes_rl = find_any_bounds(xml)
+            print(f"[RELOGIN_STATE] {[n for n in nodes_rl if n[0].strip()][:12]}")
+            continue
+
         # Tap any decompile/open action dialog that appears mid-wait
         for kw in ["Decompile", "decompile", "反编译", "OK", "确定", "Open", "Continue", "开始", "Start"]:
             if any(t.strip() == kw for t, x, y in visible):

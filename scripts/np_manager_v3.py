@@ -862,71 +862,120 @@ def scroll_tool_list_and_tap(tool_name):
         time.sleep(0.5)
     return False
 
+def reenter_function_tools():
+    """From APK info screen (FUNCTION/VIEW/INSTALL), re-tap FUNCTION to get back to tools list.
+    Returns True if we're back on the tools list."""
+    xml = get_xml()
+    nodes = find_any_bounds(xml)
+    texts = [t.strip() for t,x,y in nodes if t.strip()]
+    # Already on tools list?
+    if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
+        return True
+    # On APK info screen with FUNCTION button?
+    if "FUNCTION" in texts:
+        tap_text(xml, "FUNCTION", "Re-enter FUNCTION tools")
+        time.sleep(4)
+        # FUNCTION triggers login re-check
+        xml2 = get_xml()
+        if any(t in xml2 for t in ["LOGIN", "login", "Please enter"]):
+            print("[REENTER] Login screen after FUNCTION — re-logging in...")
+            relogin()
+            time.sleep(3)
+        xml3 = get_xml()
+        if any(kw in xml3 for kw in NP_TOOLS_KEYWORDS):
+            print("[REENTER] Back on tools list via FUNCTION")
+            return True
+    print("[REENTER] Could not get back to tools list")
+    return False
+
 def handle_tool_result():
-    """After tapping a tool, wait for completion and dismiss any result dialog."""
+    """After tapping a tool, wait for completion and dismiss any result dialog.
+    Returns True when done (tools list is accessible again)."""
     time.sleep(3)
-    for attempt in range(30):  # up to 60s
+    submitted = False  # track if we already tapped CONFIRM/START
+
+    for attempt in range(40):  # up to 80s
         xml = get_xml()
         nodes = find_any_bounds(xml)
         texts = [t.strip() for t,x,y in nodes if t.strip()]
         print(f"[TOOL_RESULT] {texts[:8]}")
 
-        # SUPER OBFUSCATION / tool config sub-screens:
-        # "General obfuscation configuration" → tap it to proceed with full obfuscation
-        if any("general obfuscation" in t.lower() for t in texts):
-            tap_text(xml, "General obfuscation configuration", "Tool config: General")
-            print("[TOOL_CONFIG] Chose General obfuscation configuration")
-            time.sleep(3)
-            continue
+        # === COMPLETION STATES ===
 
-        # Any tool-specific sub-option dialogs (tap first item to proceed)
-        # Pattern: if screen has only a few items and none are our dismissal keywords,
-        # check if we're still on a tool page (not tools list) and tap the first option
-        if 1 <= len(texts) <= 5 and not any(kw in xml for kw in NP_TOOLS_KEYWORDS):
-            # Check if any text looks like a config option (not empty, not a button keyword)
-            config_opts = [t for t in texts if len(t) > 8 and t not in ["OK","Cancel","CLOSE","Back"]]
-            if config_opts:
-                # Tap the first config option to proceed
-                for t2, x2, y2 in nodes:
-                    if t2.strip() == config_opts[0]:
-                        adb(f"shell input tap {x2} {y2}")
-                        print(f"[TOOL_CONFIG_OPT] Tapped '{config_opts[0]}' @ ({x2},{y2})")
-                        time.sleep(3)
-                        break
-
-        # Dismiss result/completion dialogs
-        # "CONFIRM" on a config form submits and starts the tool — don't return yet, keep waiting
-        # "OK" / "Done" / "Success" on a result screen = truly done
-        final_done_keywords = ["OK", "确定", "Done", "DONE", "Success", "完成"]
-        submit_keywords = ["CONFIRM", "Confirm", "START", "Start", "开始", "Run", "RUN",
-                          "Execute", "EXECUTE", "APPLY", "Apply", "Save", "保存",
-                          "Close", "CLOSE"]
-        for kw in final_done_keywords:
-            if kw in texts:
-                tap_text(xml, kw, f"Tool done: {kw}")
-                time.sleep(3)
-                return True
-        for kw in submit_keywords:
-            if kw in texts:
-                tap_text(xml, kw, f"Tool submit: {kw}")
-                time.sleep(5)  # wait for tool to start/run after submitting
-                break  # don't return — keep waiting for completion
-
-        # If tools list is back — tool completed without a dialog
+        # 1. Tools list is visible — tool finished and returned automatically
         if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
             print("[TOOL_RESULT] Back on tools list — done")
             return True
 
-        # Still working (progress bar, spinner, loading...)
+        # 2. File browser appeared — tool saved output to files directory
+        #    (e.g. after SUPER OBFUSCATION: /sdcard/Android/data/com.wn.app.np/files)
+        if "com.wn.app.np" in xml and ("input_super.apk" in xml or "input.apk" in xml
+                                         or "Folder" in xml or "File：" in xml):
+            print("[TOOL_RESULT] File browser detected — tool completed, pressing BACK to APK info...")
+            adb("shell input keyevent KEYCODE_BACK")
+            time.sleep(3)
+            # Now on APK info screen — re-enter FUNCTION to get to tools list
+            if reenter_function_tools():
+                return True
+            # If FUNCTION triggered a re-login, relogin() was called — tools list should be visible
+            continue
+
+        # 3. APK info screen (FUNCTION/VIEW/INSTALL) — got ejected from tools, re-enter
+        if "FUNCTION" in texts and "VIEW" in texts and "INSTALL" in texts:
+            print("[TOOL_RESULT] APK info screen — re-entering FUNCTION...")
+            if reenter_function_tools():
+                return True
+            continue
+
+        # === CONFIG / SETUP SCREENS ===
+
+        # 4. "General obfuscation configuration" choice → tap it
+        if any("general obfuscation" in t.lower() for t in texts):
+            tap_text(xml, "General obfuscation configuration", "Tool config: General")
+            print("[TOOL_CONFIG] Chose General obfuscation configuration")
+            time.sleep(3)
+            submitted = False  # reset — now on config form
+            continue
+
+        # 5. Progress indicator (编译中 = "compiling", percentage, X/Y counters)
+        if any("编译中" in t or ("%" in t and len(t) < 10) or "/" in t for t in texts):
+            print(f"[TOOL_RESULT] Processing... ({texts[:3]})")
+            time.sleep(4)
+            continue
+
+        # 6. CONFIRM / START on a config form → submit (only once, then keep waiting)
+        submit_kws = ["CONFIRM", "Confirm", "START", "Start", "开始", "Run", "RUN",
+                      "Execute", "EXECUTE"]
+        for kw in submit_kws:
+            if kw in texts:
+                if not submitted:
+                    tap_text(xml, kw, f"Tool submit: {kw}")
+                    submitted = True
+                    time.sleep(6)
+                else:
+                    # Already submitted but CONFIRM still showing — screen didn't advance
+                    # Could be a stuck dialog, try tapping again after short wait
+                    time.sleep(3)
+                break
+
+        # 7. Final OK/Done/Success dialogs
+        for kw in ["OK", "确定", "Done", "DONE", "Success", "完成", "Close", "CLOSE"]:
+            if kw in texts:
+                tap_text(xml, kw, f"Tool done: {kw}")
+                time.sleep(3)
+                return True
+
+        # Still waiting...
         time.sleep(2)
 
-    print("[TOOL_RESULT] Timeout waiting for tool")
-    # Press back to return to tools list
+    print("[TOOL_RESULT] Timeout — trying to recover to tools list")
+    # Press BACK to escape any sub-screen
     adb("shell input keyevent KEYCODE_BACK")
     time.sleep(2)
-    # Press back again in case we're in a nested screen
     xml_chk = get_xml()
-    if not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
+    if "FUNCTION" in xml_chk:
+        reenter_function_tools()
+    elif not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
         adb("shell input keyevent KEYCODE_BACK")
         time.sleep(2)
     return False

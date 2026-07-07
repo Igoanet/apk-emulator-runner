@@ -278,12 +278,21 @@ def handle_login():
     print("[+] Login done")
     return True
 
-PROJECT_KEYWORDS = ["Smali", "Manifest", "Resources", "AndroidManifest", "classes.dex",
-                    "smali", "manifest", "res/", "META-INF", "decompile", "Decompile",
-                    "反编译", "工具", "Tools", "input.apk", "base.apk"]
+# Keywords that ONLY appear in the project editor (not the file browser or dialogs)
+# NP Manager project editor shows smali source, Manifest editor, classes.dex, res/, META-INF
+# Avoid generic words like "Tools", "Decompile", "input.apk" which appear in the file browser too
+PROJECT_KEYWORDS = [
+    "Smali", "smali",           # Smali editor tab
+    "AndroidManifest",          # Manifest editor (unique to project)
+    "classes.dex",              # Dex file listed in project tree
+    "META-INF",                 # Project tree entry
+    "res/",                     # Project tree entry (with slash)
+]
 
 def is_project_loaded(xml):
-    return any(kw in xml for kw in PROJECT_KEYWORDS)
+    # Require at least 2 project-specific signals to avoid false positives
+    matches = [kw for kw in PROJECT_KEYWORDS if kw in xml]
+    return len(matches) >= 2
 
 def find_any_bounds(xml):
     """Return all (text, cx, cy) tuples from clickable nodes."""
@@ -505,39 +514,61 @@ def open_apk():
     print(f"[NODES_NP_FILES] {visible}")
 
     if is_project_loaded(xml):
-        print("[+] Project already loaded!")
+        print("[+] Project editor already showing!")
         return True
 
-    # Check where we ended up
+    # Check where we ended up after navigation
     curr_path = next((t for t,x,y in visible if "/storage" in t or "/sdcard" in t), "unknown")
     print(f"[CURR_PATH] {curr_path}")
 
     # Tap input.apk if visible
     apk_tapped = False
     for txt, cx, cy in nodes_f:
-        if "input" in txt.lower() or ".apk" in txt.lower():
+        if "input" in txt.lower() and ".apk" in txt.lower():
             adb(f"shell input tap {cx} {cy}")
             print(f"[*] Tapped APK '{txt}' @ ({cx},{cy})")
             apk_tapped = True
             time.sleep(3)
             break
 
-    if apk_tapped:
-        xml3 = get_xml(save_as="04_after_apk_tap")
-        nodes3 = find_any_bounds(xml3)
-        print(f"[NODES_AFTER_TAP] {[n for n in nodes3 if n[0].strip()]}")
-        for kw in ["Decompile", "decompile", "反编译", "Open project", "Project", "Editor", "OK", "确定"]:
-            if tap_text(xml3, kw, f"APK dialog: {kw}"):
+    if not apk_tapped:
+        # Also accept bare "input" filename
+        for txt, cx, cy in nodes_f:
+            if txt.strip().lower() == "input.apk" or (txt.strip().lower().startswith("input") and ".apk" in txt.lower()):
+                adb(f"shell input tap {cx} {cy}")
+                print(f"[*] Tapped APK fallback '{txt}' @ ({cx},{cy})")
+                apk_tapped = True
                 time.sleep(3)
                 break
-    else:
+
+    if not apk_tapped:
         print(f"[!] input.apk not visible in NP files dir.")
         r_ls2 = adb(f"shell ls -la {NP_FILES_DIR}/ /sdcard/Download/ 2>&1")
         print(f"[LS_CHECK] {r_ls2.stdout.strip()[:400]}")
+    else:
+        # After tapping input.apk, NP Manager may show a context/action dialog.
+        # Print ALL nodes so we know exactly what to tap.
+        xml3 = get_xml(save_as="04_after_apk_tap")
+        nodes3 = find_any_bounds(xml3)
+        print(f"[NODES_AFTER_TAP] {[n for n in nodes3 if n[0].strip()]}")
+        if is_project_loaded(xml3):
+            print("[+] Project editor opened immediately!")
+            return True
+        # Tap the first action word we find in the dialog
+        tapped_dialog = False
+        for kw in ["Decompile", "decompile", "反编译", "Open project", "Project", "Editor",
+                   "OK", "确定", "Open", "Start", "开始", "Import", "导入"]:
+            if tap_text(xml3, kw, f"APK dialog: {kw}"):
+                tapped_dialog = True
+                time.sleep(5)
+                break
+        if not tapped_dialog:
+            print(f"[!] No known dialog option found after tap. Will wait for editor...")
 
-    # Step 3: Wait for project editor/decompile UI to load (up to 90s)
+    # Step 3: Wait for project editor/decompile UI to load (up to 120s)
+    # NP Manager decompiles the APK which takes 20-60s on the emulator
     print("[*] Waiting for project editor...")
-    for i in range(45):
+    for i in range(60):
         time.sleep(2)
         xml = get_xml()
         # Dismiss any ANR that reappears
@@ -551,12 +582,12 @@ def open_apk():
         nodes_w = find_any_bounds(xml)
         visible = [n for n in nodes_w if n[0].strip()]
         if i % 5 == 0:
-            print(f"[WAIT_{i*2}s] {visible[:10]}")
-        # Dismiss decompile/open dialogs
-        for kw in ["Decompile", "decompile", "反编译", "OK", "确定", "Open", "Continue"]:
-            if any(kw in t for t, x, y in visible):
-                tap_text(xml, kw, f"Dialog: {kw}")
-                time.sleep(2)
+            print(f"[WAIT_{i*2}s] {visible[:12]}")
+        # Tap any decompile/open action dialog that appears mid-wait
+        for kw in ["Decompile", "decompile", "反编译", "OK", "确定", "Open", "Continue", "开始", "Start"]:
+            if any(t.strip() == kw for t, x, y in visible):
+                tap_text(xml, kw, f"Dialog mid-wait: {kw}")
+                time.sleep(3)
                 break
 
     print("[!] Project load timeout")

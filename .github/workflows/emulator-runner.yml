@@ -30,28 +30,44 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - run: |
+
+      - name: Enable KVM
+        run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      - run: |
-          pip install python-telegram-bot requests
-          sudo apt-get update -qq && sudo apt-get install -y -qq android-tools-adb wget curl unzip 2>/dev/null
-      - run: |
+
+      - name: Install deps
+        run: |
+          pip install requests
+          sudo apt-get update -qq && sudo apt-get install -y -qq android-tools-adb wget curl unzip
+
+      - name: Download APK tools from VPS
+        run: |
           mkdir -p ~/apk-tools ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
-          curl -sf "http://13.60.208.8/input/np_manager.apk" -o ~/apk-tools/np_manager.apk || echo "NP not found"
-          curl -sf "http://13.60.208.8/input/mt_manager.apk" -o ~/apk-tools/mt_manager.apk || echo "MT not found"
-          curl -sf "http://13.60.208.8/input/apktool_m.apk" -o ~/apk-tools/apktool_m.apk || echo "APKTool not found"
+          curl -sf "http://13.60.208.8/input/np_manager.apk" -o ~/apk-tools/np_manager.apk && echo "NP Manager: $(stat -c%s ~/apk-tools/np_manager.apk) bytes" || echo "NP Manager not found"
+          curl -sf "http://13.60.208.8/input/mt_manager.apk" -o ~/apk-tools/mt_manager.apk && echo "MT Manager: $(stat -c%s ~/apk-tools/mt_manager.apk) bytes" || echo "MT Manager not found"
+          curl -sf "http://13.60.208.8/input/apktool_m.apk" -o ~/apk-tools/apktool_m.apk && echo "APKTool M: $(stat -c%s ~/apk-tools/apktool_m.apk) bytes" || echo "APKTool M not found"
           ls -lh ~/apk-tools/
-      - uses: reactivecircus/android-emulator-runner@v2
+
+      - name: Download input APK
+        run: |
+          wget -q "${{ github.event.inputs.apk_url }}" -O ~/fud-work/input/base.apk
+          echo "Input APK: $(stat -c%s ~/fud-work/input/base.apk) bytes"
+
+      - name: Run Emulator + NP Manager Login + Tools
+        uses: reactivecircus/android-emulator-runner@v2
         env:
           NP_MANAGER_EMAIL: ${{ github.event.inputs.np_manager_email }}
           NP_MANAGER_PASS: ${{ github.event.inputs.np_manager_pass }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          APK_URL: ${{ github.event.inputs.apk_url }}
+          NP_APK: /root/apk-tools/np_manager.apk
+          INPUT_APK: /root/fud-work/input/base.apk
+          OUTPUT_DIR: /root/fud-work/output
+          SCREENSHOT_DIR: /root/fud-work/screenshots
         with:
           api-level: 33
           target: google_apis
@@ -63,15 +79,18 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           script: |
+            echo "=== Emulator ready ==="
             adb wait-for-device
-            echo "=== Emulator booted ==="
-            python3 scripts/np_manager_v2.py
-      - name: Upload artifacts
+            sleep 5
+            python3 scripts/np_manager_v3.py
+
+      - name: Upload output APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fud-output-${{ github.event.inputs.job_id }}
           path: ~/fud-work/output/
+
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4

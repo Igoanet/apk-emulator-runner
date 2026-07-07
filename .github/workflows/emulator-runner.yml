@@ -46,28 +46,28 @@ jobs:
           pip install requests
           sudo apt-get update -qq && sudo apt-get install -y -qq android-tools-adb wget curl unzip
 
-      - name: Download APK tools from VPS
+      - name: Create work dirs and download APK tools
         run: |
-          mkdir -p ~/apk-tools ~/fud-work/input ~/fud-work/output ~/fud-work/screenshots
-          curl -sf "http://13.60.208.8/input/np_manager.apk" -o ~/apk-tools/np_manager.apk && echo "NP Manager: $(stat -c%s ~/apk-tools/np_manager.apk) bytes" || echo "NP Manager not found"
-          curl -sf "http://13.60.208.8/input/mt_manager.apk" -o ~/apk-tools/mt_manager.apk && echo "MT Manager: $(stat -c%s ~/apk-tools/mt_manager.apk) bytes" || echo "MT Manager not found"
-          curl -sf "http://13.60.208.8/input/apktool_m.apk" -o ~/apk-tools/apktool_m.apk && echo "APKTool M: $(stat -c%s ~/apk-tools/apktool_m.apk) bytes" || echo "APKTool M not found"
-          ls -lh ~/apk-tools/
+          mkdir -p $HOME/apk-tools $HOME/fud-work/input $HOME/fud-work/output $HOME/fud-work/screenshots
+          curl -sf "http://13.60.208.8/input/np_manager.apk" -o $HOME/apk-tools/np_manager.apk && echo "NP Manager: $(stat -c%s $HOME/apk-tools/np_manager.apk) bytes" || echo "NP Manager not found"
+          curl -sf "http://13.60.208.8/input/mt_manager.apk" -o $HOME/apk-tools/mt_manager.apk && echo "MT Manager: $(stat -c%s $HOME/apk-tools/mt_manager.apk) bytes" || echo "MT Manager not found"
+          curl -sf "http://13.60.208.8/input/apktool_m.apk" -o $HOME/apk-tools/apktool_m.apk && echo "APKTool M: $(stat -c%s $HOME/apk-tools/apktool_m.apk) bytes" || echo "APKTool M not found"
+          ls -lh $HOME/apk-tools/
 
       - name: Download input APK
         run: |
-          wget -q "${{ github.event.inputs.apk_url }}" -O ~/fud-work/input/base.apk
-          echo "Input APK: $(stat -c%s ~/fud-work/input/base.apk) bytes"
+          wget -q "${{ github.event.inputs.apk_url }}" -O $HOME/fud-work/input/base.apk
+          echo "Input APK: $(stat -c%s $HOME/fud-work/input/base.apk) bytes"
 
       - name: Run Emulator + NP Manager Login + Tools
         uses: reactivecircus/android-emulator-runner@v2
         env:
           NP_MANAGER_EMAIL: ${{ github.event.inputs.np_manager_email }}
           NP_MANAGER_PASS: ${{ github.event.inputs.np_manager_pass }}
-          NP_APK: /root/apk-tools/np_manager.apk
-          INPUT_APK: /root/fud-work/input/base.apk
-          OUTPUT_DIR: /root/fud-work/output
-          SCREENSHOT_DIR: /root/fud-work/screenshots
+          NP_APK: /home/runner/apk-tools/np_manager.apk
+          INPUT_APK: /home/runner/fud-work/input/base.apk
+          OUTPUT_DIR: /home/runner/fud-work/output
+          SCREENSHOT_DIR: /home/runner/fud-work/screenshots
         with:
           api-level: 33
           target: google_apis
@@ -89,11 +89,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: fud-output-${{ github.event.inputs.job_id }}
-          path: ~/fud-work/output/
+          path: /home/runner/fud-work/output/
 
       - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: fud-screenshots-${{ github.event.inputs.job_id }}
-          path: ~/fud-work/screenshots/
+          path: /home/runner/fud-work/screenshots/

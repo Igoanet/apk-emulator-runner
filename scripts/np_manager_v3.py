@@ -613,6 +613,27 @@ def open_apk():
         if i % 5 == 0:
             print(f"[WAIT_{i*2}s] {visible[:12]}")
 
+        # Detect the "Delete a signed-in device" / "DOUBLE-ENDED LOGIN" dialog
+        # shown after re-login when the account has too many devices logged in.
+        # Tap DELETE on the FIRST listed device to free up a slot, then continue.
+        if any("double-ended login" in t.lower() or "delete a signed-in device" in t.lower() or "delete signed" in t.lower() for t,x,y in visible):
+            print("[*] DOUBLE-ENDED LOGIN dialog — deleting oldest device slot...")
+            # Tap the first DELETE button (oldest device)
+            for t, x, y in visible:
+                if t.strip().upper() == "DELETE":
+                    adb(f"shell input tap {x} {y}")
+                    print(f"[*] Tapped DELETE @ ({x},{y})")
+                    time.sleep(3)
+                    break
+            # Dismiss any confirmation dialog
+            xml_dd = get_xml()
+            for kw in ["OK", "确定", "CONFIRM", "Yes", "CLOSE"]:
+                if tap_text(xml_dd, kw, f"Delete confirm: {kw}"):
+                    time.sleep(2)
+                    break
+            screenshot("after_delete_device")
+            continue
+
         # Detect login screen shown by FUNCTION's session check and re-login
         if not relogin_done and ("LOGIN" in texts or "login" in texts) and "Please enter" in " ".join(texts):
             print("[*] FUNCTION triggered login re-check — re-logging in...")

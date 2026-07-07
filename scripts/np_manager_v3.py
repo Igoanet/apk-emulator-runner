@@ -667,6 +667,29 @@ def open_apk():
                 time.sleep(3)
                 break
 
+        # Detect that we're still on the root file browser (nav failed due to ANR earlier).
+        # ANR may have cleared by now — retry nav + APK tap from here.
+        curr_paths = [t for t,x,y in visible if "/storage/emulated/0" == t or t == "/storage/emulated/0"]
+        apk_visible = any("input" in t.lower() and ".apk" in t.lower() for t,x,y in visible)
+        func_visible = any(t.strip() == "FUNCTION" for t,x,y in visible)
+        if curr_paths and not apk_visible and not func_visible and i > 0 and i % 10 == 0:
+            print(f"[WAIT_RENAVIGATING] Still at root browser, retry nav at {i*2}s...")
+            nav_to_path_in_browser(NP_FILES_DIR)
+            time.sleep(3)
+            xml2 = get_xml()
+            nodes2 = find_any_bounds(xml2)
+            for txt2, cx2, cy2 in nodes2:
+                if "input" in txt2.lower() and ".apk" in txt2.lower():
+                    adb(f"shell input tap {cx2} {cy2}")
+                    print(f"[WAIT_TAPPED_APK] '{txt2}' @ ({cx2},{cy2})")
+                    time.sleep(4)
+                    xml3 = get_xml()
+                    for kw in ["FUNCTION", "Decompile", "OK"]:
+                        if tap_text(xml3, kw, f"Post-renav: {kw}"):
+                            time.sleep(4)
+                            break
+                    break
+
     print("[!] Project load timeout")
     screenshot("load_timeout")
     xml = get_xml(save_as="07_timeout")

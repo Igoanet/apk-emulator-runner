@@ -296,24 +296,49 @@ def find_any_bounds(xml):
     return results
 
 def nav_to_path_in_browser(target_path):
-    """Use NP Manager's path bar to navigate directly to a folder path."""
-    # NP Manager has a tappable path bar at the top showing current path.
-    # Tapping it opens an editable text field where we can type a path.
+    """Use NP Manager's path bar to navigate directly to a folder path.
+    
+    NP Manager path bar workflow:
+    1. Tap path bar (shows current path like /storage/emulated/0)
+    2. A 'Jump to Path' dialog opens with editable text field
+    3. Clear, type new path, tap CONFIRM
+    """
     xml = get_xml()
     nodes = find_any_bounds(xml)
+    # Find path bar node (shows current directory path)
     path_node = next(((cx, cy) for txt, cx, cy in nodes if "/storage" in txt or "/sdcard" in txt), None)
     if path_node:
         adb(f"shell input tap {path_node[0]} {path_node[1]}")
         time.sleep(1.5)
-        # Clear existing text and type new path
+        # "Jump to Path" dialog should now be open with a text field
+        xml2 = get_xml()
+        nodes2 = find_any_bounds(xml2)
+        print(f"[NAV_DIALOG] {[n for n in nodes2 if n[0].strip()]}")
+        # Tap the text field (it contains the current path text) to focus it
+        path_field = next(((cx, cy) for txt, cx, cy in nodes2 if "/storage" in txt or "/sdcard" in txt), None)
+        if path_field:
+            adb(f"shell input tap {path_field[0]} {path_field[1]}")
+            time.sleep(0.5)
+        # Select all + clear existing text
         adb("shell input keyevent KEYCODE_CTRL_A")
         time.sleep(0.3)
+        adb("shell input keyevent KEYCODE_DEL")
+        time.sleep(0.3)
+        # Type new target path
         adb(f"shell input text '{target_path}'")
         time.sleep(0.5)
-        adb("shell input keyevent 66")  # ENTER
-        time.sleep(2)
-        print(f"[NAV] Navigated to {target_path} via path bar")
-        return True
+        # Tap CONFIRM button to navigate
+        xml3 = get_xml()
+        if tap_text(xml3, "CONFIRM", "Jump to Path CONFIRM") or tap_text(xml3, "Confirm", "Confirm"):
+            time.sleep(2)
+            print(f"[NAV] Navigated to {target_path} via CONFIRM")
+            return True
+        else:
+            # Fallback: press Enter
+            adb("shell input keyevent 66")
+            time.sleep(2)
+            print(f"[NAV] Navigated to {target_path} via Enter")
+            return True
     else:
         print(f"[NAV] No path bar found. Nodes: {[t for t,x,y in nodes if t.strip()][:10]}")
         return False

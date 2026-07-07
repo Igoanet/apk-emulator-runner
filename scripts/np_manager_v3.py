@@ -485,28 +485,51 @@ def open_apk():
     # Method 3: Dismiss dialogs and use the file browser to navigate
     # Re-launch NP Manager fresh
     adb(f"shell am force-stop {NP_PACKAGE}")
-    time.sleep(1)
+    time.sleep(2)
     adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
-    time.sleep(6)
+    time.sleep(8)
+
+    # Aggressively clear ALL ANR/dialogs — System UI ANR can persist for a while
+    for _ in range(10):
+        xml_anr = get_xml()
+        if "isn't responding" in xml_anr or "not responding" in xml_anr.lower():
+            tap_text(xml_anr, "Wait", "ANR aggressive dismiss")
+            time.sleep(2)
+        else:
+            break
 
     # Dismiss ALL dialogs
     dismiss_all_dialogs(max_attempts=15)
-    time.sleep(1)
+    time.sleep(2)
 
     screenshot("np_main_screen")
     xml = get_xml(save_as="02_main_screen")
     nodes_main = find_any_bounds(xml)
     print(f"[NODES_MAIN] {[n for n in nodes_main if n[0].strip()][:15]}")
 
-    if "isn't responding" in xml or "not responding" in xml.lower():
-        tap_text(xml, "Wait", "ANR Wait")
+    # Navigate to NP files dir — retry up to 3 times in case ANR blocks dialog
+    nav_ok = False
+    for nav_attempt in range(3):
+        # Clear any lingering ANRs before each attempt
+        for _ in range(5):
+            xml_chk = get_xml()
+            if "isn't responding" in xml_chk or "not responding" in xml_chk.lower():
+                tap_text(xml_chk, "Wait", f"ANR pre-nav attempt {nav_attempt}")
+                time.sleep(2)
+            else:
+                break
+        print(f"[*] Navigating to NP files dir (attempt {nav_attempt+1})...")
+        nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
         time.sleep(3)
-        xml = get_xml()
-
-    # Navigate to NP files dir and look for APK
-    print("[*] Navigating to NP files dir via path bar...")
-    nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
-    time.sleep(2)
+        # Verify we actually navigated
+        xml_nav = get_xml()
+        nodes_nav = find_any_bounds(xml_nav)
+        curr = next((t for t,x,y in nodes_nav if NP_FILES_DIR in t or "com.wn.app.np" in t), None)
+        if curr:
+            print(f"[NAV_SUCCESS] At {curr} on attempt {nav_attempt+1}")
+            break
+        print(f"[NAV_RETRY] Still not at NP files dir after attempt {nav_attempt+1}, retrying...")
+        time.sleep(3)
 
     screenshot("inside_np_files")
     xml = get_xml(save_as="03_np_files_contents")

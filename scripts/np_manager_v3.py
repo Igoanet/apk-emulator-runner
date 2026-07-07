@@ -651,23 +651,46 @@ def open_apk():
 
         # Detect the "Delete a signed-in device" / "DOUBLE-ENDED LOGIN" dialog
         # shown after re-login when the account has too many devices logged in.
-        # Tap DELETE on the FIRST listed device to free up a slot, then continue.
-        if any("double-ended login" in t.lower() or "delete a signed-in device" in t.lower() or "delete signed" in t.lower() for t,x,y in visible):
+        # Tap DELETE on the FIRST listed device to free up a slot.
+        # After DELETE, NP Manager returns to the login screen with credentials pre-filled —
+        # just tap LOGIN again (no need to re-enter credentials).
+        if any("double-ended login" in t.lower() or "delete a signed-in device" in t.lower() for t,x,y in visible):
             print("[*] DOUBLE-ENDED LOGIN dialog — deleting oldest device slot...")
-            # Tap the first DELETE button (oldest device)
+            # Tap the first DELETE button (oldest device = first in list)
             for t, x, y in visible:
                 if t.strip().upper() == "DELETE":
                     adb(f"shell input tap {x} {y}")
                     print(f"[*] Tapped DELETE @ ({x},{y})")
-                    time.sleep(3)
+                    time.sleep(4)
                     break
-            # Dismiss any confirmation dialog
+            # After DELETE, dismiss any confirmation dialog ("OK", "确定", etc.)
             xml_dd = get_xml()
-            for kw in ["OK", "确定", "CONFIRM", "Yes", "CLOSE"]:
+            nodes_dd = find_any_bounds(xml_dd)
+            print(f"[AFTER_DELETE] {[n for n in nodes_dd if n[0].strip()][:8]}")
+            for kw in ["OK", "确定", "CONFIRM", "Yes"]:
                 if tap_text(xml_dd, kw, f"Delete confirm: {kw}"):
                     time.sleep(2)
+                    xml_dd = get_xml()
+                    nodes_dd = find_any_bounds(xml_dd)
                     break
             screenshot("after_delete_device")
+            # NP Manager returns to login screen with credentials already filled.
+            # Detect this and tap LOGIN immediately.
+            texts_dd = [t for t,x,y in nodes_dd if t.strip()]
+            if "LOGIN" in texts_dd and any("@" in t or "••" in t for t,x,y in nodes_dd):
+                print("[*] Back on login screen after DELETE — tapping LOGIN (creds pre-filled)...")
+                for t2, x2, y2 in nodes_dd:
+                    if t2.strip() == "LOGIN":
+                        adb(f"shell input tap {x2} {y2}")
+                        print(f"[RELOGIN2_LOGIN] tapped @ ({x2},{y2})")
+                        time.sleep(8)
+                        break
+                else:
+                    # Fallback: tap at known LOGIN position
+                    adb("shell input tap 540 1302")
+                    print("[RELOGIN2_LOGIN] fallback tap @ (540,1302)")
+                    time.sleep(8)
+                relogin_done = True
             continue
 
         # Detect login screen shown by FUNCTION's session check and re-login

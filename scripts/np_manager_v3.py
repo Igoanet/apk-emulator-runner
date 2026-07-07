@@ -862,31 +862,68 @@ def scroll_tool_list_and_tap(tool_name):
         time.sleep(0.5)
     return False
 
-def reenter_function_tools():
-    """From APK info screen (FUNCTION/VIEW/INSTALL), re-tap FUNCTION to get back to tools list.
-    Returns True if we're back on the tools list."""
-    xml = get_xml()
-    nodes = find_any_bounds(xml)
-    texts = [t.strip() for t,x,y in nodes if t.strip()]
-    # Already on tools list?
-    if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
-        return True
-    # On APK info screen with FUNCTION button?
-    if "FUNCTION" in texts:
-        tap_text(xml, "FUNCTION", "Re-enter FUNCTION tools")
-        time.sleep(4)
-        # FUNCTION triggers login re-check
-        xml2 = get_xml()
-        if any(t in xml2 for t in ["LOGIN", "login", "Please enter"]):
-            print("[REENTER] Login screen after FUNCTION — re-logging in...")
+def wait_for_apk_info_and_enter_function():
+    """Wait for NP Manager APK info screen (FUNCTION/VIEW/INSTALL), then tap FUNCTION.
+    Handles login re-check. Returns True if we reach the tools list."""
+    print("[REENTER] Waiting for APK info screen...")
+    for wait_try in range(12):  # up to 24s
+        time.sleep(2)
+        xml = get_xml()
+        texts_w = [t.strip() for t,x,y in find_any_bounds(xml) if t.strip()]
+        # Already on tools list
+        if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
+            print("[REENTER] Already on tools list")
+            return True
+        # APK info screen — tap FUNCTION
+        if "FUNCTION" in texts_w:
+            print(f"[REENTER] APK info screen found (try {wait_try+1}), tapping FUNCTION...")
+            tap_text(xml, "FUNCTION", "REENTER FUNCTION")
+            time.sleep(5)
+            # Handle login re-check
+            xml2 = get_xml()
+            if any(t in xml2 for t in ["Please enter", "LOGIN", "login", "Password"]):
+                print("[REENTER] Login re-check — re-logging in...")
+                relogin()
+                time.sleep(3)
+                xml2 = get_xml()
+            if any(kw in xml2 for kw in NP_TOOLS_KEYWORDS):
+                print("[REENTER] Back on tools list")
+                return True
+            # FUNCTION might have gone to a different state — keep waiting
+            continue
+        # Login screen appeared
+        if any(t in xml for t in ["Please enter", "LOGIN", "login"]):
+            print("[REENTER] Login screen — re-logging in...")
             relogin()
             time.sleep(3)
-        xml3 = get_xml()
-        if any(kw in xml3 for kw in NP_TOOLS_KEYWORDS):
-            print("[REENTER] Back on tools list via FUNCTION")
-            return True
-    print("[REENTER] Could not get back to tools list")
+            continue
+        print(f"[REENTER] Still waiting... ({texts_w[:3]})")
+    print("[REENTER] Gave up waiting for APK info screen")
     return False
+
+def recover_from_file_browser():
+    """Called when file browser is detected after a tool completes.
+    Launches NP Manager APK info screen and gets back to tools list."""
+    print("[FILE_BROWSER] Tool done — launching NP Manager APK info screen...")
+    # Launch NP Manager directly on the APK installer screen for input.apk
+    adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
+        " -a android.intent.action.VIEW"
+        " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
+        " -t application/vnd.android.package-archive")
+    time.sleep(6)
+    # Dismiss any stale dialogs (CANCEL, CLOSE)
+    for _ in range(3):
+        xml_d = get_xml()
+        dismissed = False
+        for kw in ["CANCEL", "CLOSE", "Close", "NO", "Later", "LATER"]:
+            if kw in xml_d:
+                tap_text(xml_d, kw, f"Dismiss dialog: {kw}")
+                time.sleep(1)
+                dismissed = True
+                break
+        if not dismissed:
+            break
+    return wait_for_apk_info_and_enter_function()
 
 def handle_tool_result():
     """After tapping a tool, wait for completion and dismiss any result dialog.
@@ -894,7 +931,7 @@ def handle_tool_result():
     time.sleep(3)
     submitted = False  # track if we already tapped CONFIRM/START
 
-    for attempt in range(40):  # up to 80s
+    for attempt in range(40):  # up to ~80s total (mix of 2s and 4s sleeps)
         xml = get_xml()
         nodes = find_any_bounds(xml)
         texts = [t.strip() for t,x,y in nodes if t.strip()]
@@ -907,38 +944,26 @@ def handle_tool_result():
             print("[TOOL_RESULT] Back on tools list — done")
             return True
 
-        # 2. File browser appeared — tool saved output to files directory
-        #    Press HOME to exit file browser entirely, then re-enter NP Manager tools list
-        if ("Folder：" in xml or "File：" in xml) and ("input_super.apk" in xml or "/sdcard" in xml or "com.wn.app.np" in xml):
-            print("[TOOL_RESULT] File browser detected — pressing HOME then re-entering NP Manager...")
-            adb("shell input keyevent KEYCODE_HOME")
-            time.sleep(2)
-            # Re-launch NP Manager on the APK info screen
-            adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
-                " -a android.intent.action.VIEW"
-                " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
-                " -t application/vnd.android.package-archive")
-            time.sleep(5)
-            # Dismiss any dialogs
-            for _ in range(3):
-                xml_d = get_xml()
-                for kw in ["CANCEL", "CLOSE", "Close", "NO"]:
-                    if kw in xml_d:
-                        tap_text(xml_d, kw, f"Dismiss {kw}")
-                        time.sleep(1)
-                        break
-                else:
-                    break
-            time.sleep(2)
-            # Should now be on APK info screen — tap FUNCTION
-            if reenter_function_tools():
+        # 2. File browser appeared — tool saved output, escape and re-enter
+        if ("Folder：" in xml or "File：" in xml) and ("/sdcard" in xml or "com.wn.app.np" in xml):
+            print("[TOOL_RESULT] File browser — escaping via am start to APK info...")
+            if recover_from_file_browser():
+                return True
+            # If still not recovered, keep looping — might need another attempt
+            continue
+
+        # 3. Home screen (Gmail, Photos, Chrome etc) — NP Manager was closed, re-launch
+        HOME_INDICATORS = ["Gmail", "Chrome", "YouTube", "Phone"]
+        if sum(1 for h in HOME_INDICATORS if h in xml) >= 2:
+            print("[TOOL_RESULT] Home screen — re-launching NP Manager...")
+            if recover_from_file_browser():
                 return True
             continue
 
-        # 3. APK info screen (FUNCTION/VIEW/INSTALL) — got ejected from tools, re-enter
-        if "FUNCTION" in texts and "VIEW" in texts and "INSTALL" in texts:
-            print("[TOOL_RESULT] APK info screen — re-entering FUNCTION...")
-            if reenter_function_tools():
+        # 4. APK info screen (FUNCTION/VIEW/INSTALL) — tap FUNCTION directly
+        if "FUNCTION" in texts and ("VIEW" in texts or "INSTALL" in texts):
+            print("[TOOL_RESULT] APK info screen — tapping FUNCTION...")
+            if wait_for_apk_info_and_enter_function():
                 return True
             continue
 

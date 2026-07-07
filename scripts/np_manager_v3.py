@@ -307,21 +307,22 @@ def find_any_bounds(xml):
 def clear_text_field_and_type(field_x, field_y, new_text):
     """Clear an Android text field and type new text.
     
-    Strategy: tap to focus, move to end, send many DEL keycodes to clear,
-    verify cleared, then type new text.
+    Strategy: tap to focus, select all (CTRL+A), delete, then type.
+    Also sends many DEL keycodes as a belt-and-suspenders approach.
     """
     # Focus the field
     adb(f"shell input tap {field_x} {field_y}")
     time.sleep(0.5)
-    # Move cursor to end of existing text
+    # Select all text in the field
+    adb("shell input keyevent KEYCODE_CTRL_A")
+    time.sleep(0.2)
+    # Delete selected text
+    adb("shell input keyevent KEYCODE_DEL")
+    time.sleep(0.2)
+    # Also move to end and send many DEL as fallback (in case CTRL+A didn't work)
     adb("shell input keyevent KEYCODE_MOVE_END")
     time.sleep(0.2)
-    # Send 80 DEL keycodes (each as separate keyevent for reliability)
-    # /storage/emulated/0 = 21 chars; our longest path = 45 chars
-    del_events = " ".join(["KEYCODE_DEL"] * 50)
-    adb(f"shell input keyevent {del_events}")
-    time.sleep(0.3)
-    # Send another batch for good measure
+    del_events = " ".join(["KEYCODE_DEL"] * 80)
     adb(f"shell input keyevent {del_events}")
     time.sleep(0.3)
     # Now type new text
@@ -592,21 +593,43 @@ def open_apk():
         # Detect login screen shown by FUNCTION's session check and re-login
         if not relogin_done and ("LOGIN" in texts or "login" in texts) and "Please enter" in " ".join(texts):
             print("[*] FUNCTION triggered login re-check — re-logging in...")
-            # Enter credentials
-            email_field = find_text(xml, "Please enter your account number/email address")
-            pass_field  = find_text(xml, "Please enter a password")
-            if email_field:
-                adb(f"shell input tap {email_field[0]} {email_field[1]}")
-                time.sleep(0.5)
-                adb(f"shell input text '{EMAIL}'")
-                time.sleep(0.5)
-            if pass_field:
-                adb(f"shell input tap {pass_field[0]} {pass_field[1]}")
-                time.sleep(0.5)
-                adb(f"shell input text '{PASSWORD}'")
-                time.sleep(0.5)
-            tap_text(xml, "LOGIN", "Re-login LOGIN btn")
-            time.sleep(5)
+            # The re-login screen may show placeholder hints OR pre-filled content.
+            # Strategy: find email field by placeholder OR by "@" in text, then
+            # use clear_text_field_and_type (which does CTRL+A + 80xDEL) to wipe it.
+            all_nodes = find_any_bounds(xml)
+            # Identify email field: placeholder text or a node containing "@"
+            email_node = None
+            for t, x, y in all_nodes:
+                if "account number" in t.lower() or "email address" in t.lower() or "@" in t:
+                    email_node = (x, y)
+                    print(f"[RELOGIN_EMAIL_FIELD] found at ({x},{y}): {t[:40]}")
+                    break
+            # Identify password field: placeholder text
+            pass_node = None
+            for t, x, y in all_nodes:
+                if "password" in t.lower() and x > 400:
+                    pass_node = (x, y)
+                    print(f"[RELOGIN_PASS_FIELD] found at ({x},{y}): {t[:40]}")
+                    break
+            # Identify LOGIN button
+            login_node = None
+            for t, x, y in all_nodes:
+                if t.strip().upper() == "LOGIN":
+                    login_node = (x, y)
+                    break
+            # Clear and fill email
+            ex, ey = email_node if email_node else (540, 936)
+            clear_text_field_and_type(ex, ey, EMAIL)
+            time.sleep(1)
+            # Clear and fill password
+            px, py = pass_node if pass_node else (540, 1096)
+            clear_text_field_and_type(px, py, PASSWORD)
+            time.sleep(1)
+            # Tap LOGIN
+            lx, ly = login_node if login_node else (540, 1302)
+            print(f"[RELOGIN_LOGIN_BTN] tapping LOGIN @ ({lx},{ly})")
+            adb(f"shell input tap {lx} {ly}")
+            time.sleep(6)
             relogin_done = True
             screenshot("after_relogin")
             xml = get_xml(save_as="relogin_state")

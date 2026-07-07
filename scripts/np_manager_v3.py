@@ -368,10 +368,23 @@ def nav_to_path_in_browser(target_path):
     field_now = next((t for t,x,y in nodes_check if "/sdcard" in t or "/storage" in t or "Android" in t), "?")
     print(f"[NAV_FIELD_AFTER_TYPE] '{field_now}'")
 
-    # Tap CONFIRM using coordinates captured before typing
-    if confirm_pos:
-        adb(f"shell input tap {confirm_pos[0]} {confirm_pos[1]}")
-        print(f"[NAV] Tapped CONFIRM @ {confirm_pos}")
+    # CRITICAL: Dismiss the soft keyboard BEFORE tapping CONFIRM
+    # The keyboard appears after typing and covers the dialog buttons at y=1360.
+    # Press Back to hide keyboard without closing the dialog.
+    adb("shell input keyevent KEYCODE_BACK")
+    time.sleep(0.8)
+
+    # Re-read XML to get CONFIRM coords after keyboard dismissal
+    xml_nodialog = get_xml()
+    nodes_nodialog = find_any_bounds(xml_nodialog)
+    print(f"[NAV_AFTER_KB_DISMISS] {[n for n in nodes_nodialog if n[0].strip()][:8]}")
+    confirm_pos2 = next(((cx, cy) for txt, cx, cy in nodes_nodialog if txt == "CONFIRM"), confirm_pos)
+    print(f"[NAV_CONFIRM_POS2] {confirm_pos2}")
+
+    # Tap CONFIRM
+    if confirm_pos2:
+        adb(f"shell input tap {confirm_pos2[0]} {confirm_pos2[1]}")
+        print(f"[NAV] Tapped CONFIRM @ {confirm_pos2}")
         time.sleep(2)
     else:
         adb("shell input keyevent 66")
@@ -408,6 +421,16 @@ def open_apk():
     time.sleep(1)
     r_ls = adb(f"shell ls -la {DL_DIR}/ {NP_FILES_DIR}/")
     print(f"[LS_BOTH] {r_ls.stdout.strip()[:500]}")
+
+    # Grant NP Manager MANAGE_EXTERNAL_STORAGE so it can see all files on the device.
+    # On Android 13 (emulator API 33), scoped storage prevents NP from browsing Download/.
+    # appops grant bypasses the UI permission dialog entirely.
+    r_grant = adb(f"shell appops set {NP_PACKAGE} MANAGE_EXTERNAL_STORAGE allow")
+    print(f"[GRANT_STORAGE] {r_grant.stdout.strip()} {r_grant.stderr.strip()}")
+    r_grant2 = adb(f"shell pm grant {NP_PACKAGE} android.permission.READ_EXTERNAL_STORAGE 2>&1")
+    print(f"[GRANT_READ] {r_grant2.stdout.strip()}")
+    r_grant3 = adb(f"shell pm grant {NP_PACKAGE} android.permission.WRITE_EXTERNAL_STORAGE 2>&1")
+    print(f"[GRANT_WRITE] {r_grant3.stdout.strip()}")
 
     # Re-launch NP Manager fresh
     adb(f"shell am force-stop {NP_PACKAGE}")

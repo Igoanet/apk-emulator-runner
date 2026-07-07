@@ -865,28 +865,61 @@ def scroll_tool_list_and_tap(tool_name):
 def handle_tool_result():
     """After tapping a tool, wait for completion and dismiss any result dialog."""
     time.sleep(3)
-    for _ in range(20):  # up to 40s
+    for attempt in range(30):  # up to 60s
         xml = get_xml()
         nodes = find_any_bounds(xml)
         texts = [t.strip() for t,x,y in nodes if t.strip()]
         print(f"[TOOL_RESULT] {texts[:8]}")
+
+        # SUPER OBFUSCATION / tool config sub-screens:
+        # "General obfuscation configuration" → tap it to proceed with full obfuscation
+        if any("general obfuscation" in t.lower() for t in texts):
+            tap_text(xml, "General obfuscation configuration", "Tool config: General")
+            print("[TOOL_CONFIG] Chose General obfuscation configuration")
+            time.sleep(3)
+            continue
+
+        # Any tool-specific sub-option dialogs (tap first item to proceed)
+        # Pattern: if screen has only a few items and none are our dismissal keywords,
+        # check if we're still on a tool page (not tools list) and tap the first option
+        if 1 <= len(texts) <= 5 and not any(kw in xml for kw in NP_TOOLS_KEYWORDS):
+            # Check if any text looks like a config option (not empty, not a button keyword)
+            config_opts = [t for t in texts if len(t) > 8 and t not in ["OK","Cancel","CLOSE","Back"]]
+            if config_opts:
+                # Tap the first config option to proceed
+                for t2, x2, y2 in nodes:
+                    if t2.strip() == config_opts[0]:
+                        adb(f"shell input tap {x2} {y2}")
+                        print(f"[TOOL_CONFIG_OPT] Tapped '{config_opts[0]}' @ ({x2},{y2})")
+                        time.sleep(3)
+                        break
+
         # Dismiss result/completion dialogs
         for kw in ["OK", "确定", "Done", "DONE", "Close", "CLOSE", "Success", "完成",
-                   "Save", "保存", "APPLY", "Apply", "Confirm", "CONFIRM"]:
+                   "Save", "保存", "APPLY", "Apply", "Confirm", "CONFIRM", "START",
+                   "Start", "开始", "Run", "RUN", "Execute", "EXECUTE"]:
             if kw in texts:
                 tap_text(xml, kw, f"Tool done: {kw}")
-                time.sleep(2)
+                time.sleep(3)
                 return True
+
         # If tools list is back — tool completed without a dialog
         if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
             print("[TOOL_RESULT] Back on tools list — done")
             return True
-        # Still working (progress bar, spinner, etc.)
+
+        # Still working (progress bar, spinner, loading...)
         time.sleep(2)
+
     print("[TOOL_RESULT] Timeout waiting for tool")
     # Press back to return to tools list
     adb("shell input keyevent KEYCODE_BACK")
     time.sleep(2)
+    # Press back again in case we're in a nested screen
+    xml_chk = get_xml()
+    if not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
+        adb("shell input keyevent KEYCODE_BACK")
+        time.sleep(2)
     return False
 
 def run_tools():
@@ -912,6 +945,19 @@ def run_tools():
 
     for tool_name in TOOLS_TO_RUN:
         print(f"\n[TOOL] >>> {tool_name}")
+        # Ensure we're on the tools list (not stuck in a sub-screen)
+        xml_chk = get_xml()
+        if not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
+            print("[TOOL] Not on tools list — pressing BACK to recover...")
+            adb("shell input keyevent KEYCODE_BACK")
+            time.sleep(2)
+            adb("shell input keyevent KEYCODE_BACK")
+            time.sleep(2)
+        # Scroll to top of tools list
+        for _ in range(5):
+            scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
+            time.sleep(0.3)
+        time.sleep(1)
         screenshot(f"before_{tool_name[:20].replace(' ','_')}")
         tapped = scroll_tool_list_and_tap(tool_name)
         if not tapped:
@@ -921,11 +967,6 @@ def run_tools():
         screenshot(f"after_tap_{tool_name[:20].replace(' ','_')}")
         handle_tool_result()
         screenshot(f"done_{tool_name[:20].replace(' ','_')}")
-        # Scroll back to top for next tool
-        for _ in range(5):
-            scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
-            time.sleep(0.3)
-        time.sleep(1)
 
     print("\n[+] All NP tools done")
     return True

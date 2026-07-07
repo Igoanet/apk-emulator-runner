@@ -100,28 +100,53 @@ def install_apk(apk_path, pkg):
     print(f"    {r.stdout[:100]} {r.stderr[:100]}")
     return "Success" in r.stdout or pkg in adb("shell pm list packages").stdout
 
-def dismiss_terms(max_attempts=6):
+def dismiss_all_dialogs(max_attempts=10):
+    """Dismiss any dialog/popup blocking the main UI: terms, update notice, announcement, etc."""
     for i in range(max_attempts):
         xml = get_xml()
-        has_terms = "\u7528\u6237\u534f\u8bae" in xml or "Notice" in xml or "Terms" in xml or "\u540c\u610f" in xml
-        if not has_terms:
+        dismissed = False
+
+        # Update dialog: "WAIT UNTIL LATER" / "UPDATE IMMEDIATELY" / "COPY URL"
+        for btn in ["WAIT UNTIL LATER", "Later", "Cancel", "CANCEL", "Skip", "SKIP",
+                    "Close", "CLOSE", "No Thanks", "Dismiss"]:
+            if tap_text(xml, btn, f"Dialog dismiss: {btn}"):
+                time.sleep(1.5)
+                dismissed = True
+                break
+
+        if not dismissed:
+            # Terms / agreement dialogs
+            has_terms = any(kw in xml for kw in [
+                "\u7528\u6237\u534f\u8bae", "Notice", "Terms", "\u540c\u610f",
+                "\u5173\u4e8eAPP", "\u6350\u8d60", "parentPanel"
+            ])
+            if has_terms:
+                print(f"[*] Dialog/terms (attempt {i+1})")
+                if i == 0:
+                    for _ in range(3):
+                        scroll_rel(0.5, 0.70, 0.5, 0.30, 500)
+                        time.sleep(0.2)
+                (
+                    tap_text(xml, "\u540c\u610f", "AGREE") or
+                    tap_text(xml, "Agree", "AGREE") or
+                    tap_text(xml, "AGREE", "AGREE") or
+                    tap_text(xml, "Yes", "Yes") or
+                    tap_text(xml, "OK", "OK") or
+                    tap_rel(0.82, 0.97, "AGREE fallback")
+                )
+                time.sleep(1.5)
+                dismissed = True
+
+        if not dismissed:
+            # No more dialogs
             return True
-        print(f"[*] Terms dialog (attempt {i+1})")
-        screenshot(f"terms_{i}")
-        if i == 0:
-            for _ in range(4):
-                scroll_rel(0.5, 0.70, 0.5, 0.30, 500)
-                time.sleep(0.3)
-        (
-            tap_text(xml, "\u540c\u610f", "AGREE") or
-            tap_text(xml, "Agree", "AGREE") or
-            tap_text(xml, "AGREE", "AGREE") or
-            tap_text(xml, "Yes", "Yes") or
-            tap_rel(0.82, 0.97, "AGREE fallback")
-        )
-        time.sleep(1.5)
-    print("[!] Terms stuck")
+
+    print("[!] Dialogs stuck after max attempts")
     return False
+
+def dismiss_terms(max_attempts=6):
+    """Legacy alias — calls dismiss_all_dialogs."""
+    return dismiss_all_dialogs(max_attempts)
 
 def launch_npm():
     print(f"[*] Launching {NP_PACKAGE}...")
@@ -272,7 +297,11 @@ def open_apk():
     time.sleep(1)
     adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
     time.sleep(5)
-    dismiss_terms()
+
+    # Dismiss ALL dialogs (update notice, announcement, terms, etc.)
+    dismiss_all_dialogs(max_attempts=12)
+    time.sleep(1)
+
     screenshot("np_main_screen")
     xml = get_xml(save_as="01_after_login")
 

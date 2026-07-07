@@ -350,45 +350,57 @@ def open_apk():
             break
 
     if not apk_tapped:
-        print(f"[!] input.apk not found in Download. Nodes: {nodes_dl}")
+        print(f"[!] input.apk not visible in NP file browser (filtered by app). Using ACTION_VIEW intent...")
         # Verify the file exists on device
         r_ls = adb("shell ls -la /sdcard/Download/")
         print(f"[LS] /sdcard/Download/: {r_ls.stdout[:500]}")
 
-        # File not visible — try long-pressing the Download folder to get context menu
-        # or try direct intent approaches
-        print("[S3] Trying direct am start with file path...")
-        # Get all exported activities from NP Manager
-        r_dump = adb(f"shell dumpsys package {NP_PACKAGE} | grep -i activity | head -30")
-        print(f"[PKG_ACTS] {r_dump.stdout[:500]}")
-
-        # Try opening via content URI (file provider)
+        # ACTION_VIEW triggers "Open with" dialog in Android
+        # NP Manager shows 3 options: APK Installer, Save As, text editor
+        # We want: NP Manager / APK Installer (first NP Manager entry) + "Just once"
         adb(f'shell am start -a android.intent.action.VIEW '
             f'-d file:///sdcard/Download/input.apk '
-            f'-t application/vnd.android.package-archive '
-            f'-p {NP_PACKAGE} --activity-no-history')
-        time.sleep(5)
-        xml = get_xml(save_as="03_after_view_intent")
-        dismiss_all_dialogs()
-        if is_project_loaded(xml):
-            print("[+] Project loaded via ACTION_VIEW!")
-            return True
+            f'-t application/vnd.android.package-archive')
+        time.sleep(4)
+        xml = get_xml(save_as="03_open_with_dialog")
+        nodes_ow = find_any_bounds(xml)
+        print(f"[NODES_OW] {nodes_ow}")
 
-        # Last resort: try tapping the first visible non-empty item
-        xml = get_xml()
-        nodes_now = find_any_bounds(xml)
-        print(f"[NODES_NOW] {nodes_now}")
-        for txt, cx, cy in nodes_now:
-            if txt.strip() and txt not in ["/storage/emulated/0/Download", "Download"] \
-               and not txt.startswith("Folder") and cy > 300:
-                adb(f"shell input tap {cx} {cy}")
-                print(f"[LAST] Tapped '{txt}' @ ({cx},{cy})")
-                time.sleep(3)
-                break
+        # The "Open with" dialog shows NP Manager entries - tap the first one (APK Installer)
+        # which opens the APK in NP Manager's project editor
+        # Strategy: find all "NP Manager" text nodes, tap the one with lowest Y (first entry)
+        nm_nodes = [(txt, cx, cy) for txt, cx, cy in nodes_ow if "NP Manager" in txt]
+        print(f"[NM_NODES] {nm_nodes}")
 
-    # Step 3: Wait for project editor to load (up to 60s)
+        if nm_nodes:
+            # Sort by Y to get the topmost NP Manager entry
+            nm_nodes.sort(key=lambda x: x[2])
+            _, cx, cy = nm_nodes[0]
+            adb(f"shell input tap {cx} {cy}")
+            print(f"[*] Tapped NP Manager (first) @ ({cx},{cy})")
+            time.sleep(2)
+            # Now tap "Just once" to open
+            xml2 = get_xml(save_as="04_after_nm_tap")
+            nodes2 = find_any_bounds(xml2)
+            print(f"[NODES_AFTER_NM] {nodes2}")
+            (
+                tap_text(xml2, "Just once", "Just once") or
+                tap_text(xml2, "JUST ONCE", "JUST ONCE") or
+                tap_text(xml2, "Once", "Once")
+            )
+            time.sleep(3)
+        else:
+            # "Open with" dialog not visible — check if NP Manager opened directly
+            print("[!] No NP Manager in Open With dialog")
+            # Try direct launch with NPMainActivity
+            adb(f'shell am start -n {NP_PACKAGE}/player.normal.np.activity.NPMainActivity '
+                f'--es file /sdcard/Download/input.apk')
+            time.sleep(5)
+            xml = get_xml(save_as="04_direct_launch")
+
+    # Step 3: Wait for project editor to load (up to 90s)
     print("[*] Waiting for project editor...")
-    for i in range(30):
+    for i in range(45):
         time.sleep(2)
         xml = get_xml()
         if is_project_loaded(xml):
@@ -396,16 +408,24 @@ def open_apk():
             return True
         if i % 5 == 0:
             nodes_w = find_any_bounds(xml)
-            print(f"[WAIT_{i*2}s] {nodes_w[:10]}")
-        # If we see input.apk appearing after scroll, tap it
-        if "input.apk" in xml or "input" in xml:
-            tap_text(xml, "input.apk", "input.apk retry")
+            print(f"[WAIT_{i*2}s] {[n for n in nodes_w if n[0].strip()][:10]}")
+            # If "Open with" dialog still showing, tap NP Manager
+            if "Open with" in xml or "NP Manager" in xml:
+                nm_now = [(t,x,y) for t,x,y in nodes_w if "NP Manager" in t]
+                if nm_now:
+                    nm_now.sort(key=lambda n: n[2])
+                    adb(f"shell input tap {nm_now[0][1]} {nm_now[0][2]}")
+                    print(f"[RETRY] Tapped NP Manager @ ({nm_now[0][1]},{nm_now[0][2]})")
+                    time.sleep(1)
+                    xml2 = get_xml()
+                    tap_text(xml2, "Just once", "Just once retry") or tap_text(xml2, "Once", "Once")
+                    time.sleep(2)
 
     print("[!] Project load timeout")
     screenshot("load_timeout")
     xml = get_xml(save_as="07_timeout")
     nodes_final = find_any_bounds(xml)
-    print(f"[TIMEOUT_NODES] {nodes_final[:30]}")
+    print(f"[TIMEOUT_NODES] {[n for n in nodes_final if n[0].strip()][:30]}")
     return False
 
 def run_tools():

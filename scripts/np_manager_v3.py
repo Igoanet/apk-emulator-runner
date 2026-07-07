@@ -405,96 +405,114 @@ def open_apk():
         print("[!] Input APK missing")
         return False
 
-    # STRATEGY: Push APK to /sdcard/Download/ — world-readable, NP Manager can browse it.
-    # Also push to NP's own app dir as backup.
+    # Push APK to a location NP Manager can access via Intent
     DL_DIR = "/sdcard/Download"
     NP_FILES_DIR = f"/sdcard/Android/data/{NP_PACKAGE}/files"
     adb(f"shell mkdir -p {NP_FILES_DIR}")
-    
-    # Push to Download (primary — NP Manager's file browser shows Download contents)
-    r_push_dl = adb(f"push '{INPUT_APK}' {DL_DIR}/input.apk")
-    print(f"[PUSH_DL] {r_push_dl.stdout.strip()[:150]} {r_push_dl.stderr.strip()[:150]}")
-    
-    # Push to NP app dir as secondary
+
+    # Push to NP's own app-private dir (it can always read its own files dir)
     r_push = adb(f"push '{INPUT_APK}' {NP_FILES_DIR}/input.apk")
     print(f"[PUSH_NP] {r_push.stdout.strip()[:150]} {r_push.stderr.strip()[:150]}")
+
+    # Also push to Download
+    r_push_dl = adb(f"push '{INPUT_APK}' {DL_DIR}/input.apk")
+    print(f"[PUSH_DL] {r_push_dl.stdout.strip()[:150]} {r_push_dl.stderr.strip()[:150]}")
+
     time.sleep(1)
-    r_ls = adb(f"shell ls -la {DL_DIR}/ {NP_FILES_DIR}/")
-    print(f"[LS_BOTH] {r_ls.stdout.strip()[:500]}")
+    r_ls = adb(f"shell ls -la {NP_FILES_DIR}/ {DL_DIR}/ 2>&1")
+    print(f"[LS_BOTH] {r_ls.stdout.strip()[:600]}")
 
-    # Grant NP Manager MANAGE_EXTERNAL_STORAGE so it can see all files on the device.
-    # On Android 13 (emulator API 33), scoped storage prevents NP from browsing Download/.
-    # appops grant bypasses the UI permission dialog entirely.
+    # Grant MANAGE_EXTERNAL_STORAGE so NP Manager's file browser can see all files
     r_grant = adb(f"shell appops set {NP_PACKAGE} MANAGE_EXTERNAL_STORAGE allow")
-    print(f"[GRANT_STORAGE] {r_grant.stdout.strip()} {r_grant.stderr.strip()}")
-    r_grant2 = adb(f"shell pm grant {NP_PACKAGE} android.permission.READ_EXTERNAL_STORAGE 2>&1")
-    print(f"[GRANT_READ] {r_grant2.stdout.strip()}")
-    r_grant3 = adb(f"shell pm grant {NP_PACKAGE} android.permission.WRITE_EXTERNAL_STORAGE 2>&1")
-    print(f"[GRANT_WRITE] {r_grant3.stdout.strip()}")
+    print(f"[GRANT_STORAGE] rc={r_grant.returncode} {r_grant.stderr.strip()[:100]}")
 
+    # STRATEGY: Send a VIEW Intent directly to NP Manager with the APK file URI.
+    # This bypasses the file browser entirely and directly opens the APK as a project.
+    # NP Manager handles android.intent.action.VIEW with application/vnd.android.package-archive.
+    APK_ON_DEVICE = f"{NP_FILES_DIR}/input.apk"
+    print(f"[*] Sending VIEW Intent for {APK_ON_DEVICE}...")
+
+    # Method 1: am start with file:// URI (NP Manager's own files dir)
+    r_intent = adb(
+        f"shell am start -n {NP_PACKAGE}/.activity.NPMainActivity"
+        f" -a android.intent.action.VIEW"
+        f" -t application/vnd.android.package-archive"
+        f" -d file://{APK_ON_DEVICE}"
+        f" --grant-read-uri-permission"
+    )
+    print(f"[INTENT_RESULT] {r_intent.stdout.strip()[:200]} {r_intent.stderr.strip()[:100]}")
+    time.sleep(5)
+
+    screenshot("after_intent")
+    xml = get_xml(save_as="01_after_intent")
+    nodes_intent = find_any_bounds(xml)
+    print(f"[NODES_INTENT] {[n for n in nodes_intent if n[0].strip()][:15]}")
+
+    if is_project_loaded(xml):
+        print("[+] Project loaded via Intent!")
+        return True
+
+    # Method 2: Try ApkInstallerActivity which NP Manager uses for its file picker
+    r_intent2 = adb(
+        f"shell am start -n {NP_PACKAGE}/.activity.ApkInstallerActivity"
+        f" -a android.intent.action.VIEW"
+        f" -t application/vnd.android.package-archive"
+        f" -d file://{APK_ON_DEVICE}"
+        f" --grant-read-uri-permission"
+    )
+    print(f"[INTENT2_RESULT] {r_intent2.stdout.strip()[:200]}")
+    time.sleep(5)
+
+    screenshot("after_intent2")
+    xml = get_xml(save_as="01b_after_intent2")
+    nodes2 = find_any_bounds(xml)
+    print(f"[NODES_INTENT2] {[n for n in nodes2 if n[0].strip()][:15]}")
+
+    if is_project_loaded(xml):
+        print("[+] Project loaded via Intent2!")
+        return True
+
+    # Method 3: Dismiss dialogs and use the file browser to navigate
     # Re-launch NP Manager fresh
     adb(f"shell am force-stop {NP_PACKAGE}")
     time.sleep(1)
     adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
     time.sleep(6)
 
-    # Dismiss ALL dialogs including ANR (Pixel Launcher isn't responding)
+    # Dismiss ALL dialogs
     dismiss_all_dialogs(max_attempts=15)
     time.sleep(1)
 
     screenshot("np_main_screen")
-    xml = get_xml(save_as="01_after_login")
+    xml = get_xml(save_as="02_main_screen")
     nodes_main = find_any_bounds(xml)
     print(f"[NODES_MAIN] {[n for n in nodes_main if n[0].strip()][:15]}")
 
-    # Check if we're still stuck on an ANR or other system dialog
     if "isn't responding" in xml or "not responding" in xml.lower():
-        print("[!] ANR still showing — tapping Wait")
-        tap_text(xml, "Wait", "ANR Wait final")
+        tap_text(xml, "Wait", "ANR Wait")
         time.sleep(3)
         xml = get_xml()
-        nodes_main = find_any_bounds(xml)
 
-    # NP Manager opens at /storage/emulated/0
-    # Strategy 1: tap Download folder directly (APK is there, and it's always visible)
-    print("[*] Looking for Download folder in main view...")
-    xml = get_xml(save_as="01b_check_download")
-    nodes_root = find_any_bounds(xml)
-    dl_tapped = False
-    for txt, cx, cy in nodes_root:
-        if txt.strip() == "Download":
-            adb(f"shell input tap {cx} {cy}")
-            print(f"[*] Tap Download folder @ ({cx},{cy})")
-            dl_tapped = True
-            time.sleep(2)
-            break
-    if not dl_tapped:
-        print("[*] Download not found, trying path bar navigation to Download...")
-        nav_ok = nav_to_path_in_browser("/sdcard/Download")
-        time.sleep(2)
+    # Navigate to NP files dir and look for APK
+    print("[*] Navigating to NP files dir via path bar...")
+    nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
+    time.sleep(2)
 
-    screenshot("inside_download")
-    xml = get_xml(save_as="02_download_contents")
+    screenshot("inside_np_files")
+    xml = get_xml(save_as="03_np_files_contents")
     nodes_f = find_any_bounds(xml)
     visible = [n for n in nodes_f if n[0].strip()]
-    print(f"[NODES_DL] {visible}")
+    print(f"[NODES_NP_FILES] {visible}")
 
     if is_project_loaded(xml):
         print("[+] Project already loaded!")
         return True
 
-    # If APK not visible in Download, try navigating to NP files dir
-    has_apk = any("input" in t.lower() or ".apk" in t.lower() for t,x,y in nodes_f)
-    if not has_apk:
-        print("[*] APK not in Download, trying NP files dir via path bar...")
-        nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
-        time.sleep(2)
-        xml = get_xml(save_as="02b_np_files")
-        nodes_f = find_any_bounds(xml)
-        visible = [n for n in nodes_f if n[0].strip()]
-        print(f"[NODES_NP_FILES] {visible}")
+    # Check where we ended up
+    curr_path = next((t for t,x,y in visible if "/storage" in t or "/sdcard" in t), "unknown")
+    print(f"[CURR_PATH] {curr_path}")
 
-    # Step 2: Tap input.apk
+    # Tap input.apk if visible
     apk_tapped = False
     for txt, cx, cy in nodes_f:
         if "input" in txt.lower() or ".apk" in txt.lower():
@@ -505,19 +523,17 @@ def open_apk():
             break
 
     if apk_tapped:
-        # After tapping an APK in NP Manager's browser it shows a context dialog
-        xml3 = get_xml(save_as="03_after_apk_tap")
+        xml3 = get_xml(save_as="04_after_apk_tap")
         nodes3 = find_any_bounds(xml3)
         print(f"[NODES_AFTER_TAP] {[n for n in nodes3 if n[0].strip()]}")
-        # Tap "Decompile" / "反编译" / first option to open as project
         for kw in ["Decompile", "decompile", "反编译", "Open project", "Project", "Editor", "OK", "确定"]:
             if tap_text(xml3, kw, f"APK dialog: {kw}"):
                 time.sleep(3)
                 break
     else:
-        print(f"[!] input.apk still not visible.")
+        print(f"[!] input.apk not visible in NP files dir.")
         r_ls2 = adb(f"shell ls -la {NP_FILES_DIR}/ /sdcard/Download/ 2>&1")
-        print(f"[LS_BOTH] {r_ls2.stdout.strip()[:400]}")
+        print(f"[LS_CHECK] {r_ls2.stdout.strip()[:400]}")
 
     # Step 3: Wait for project editor/decompile UI to load (up to 90s)
     print("[*] Waiting for project editor...")

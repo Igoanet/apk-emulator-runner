@@ -292,20 +292,38 @@ def handle_login():
     return True
 
 # Keywords that ONLY appear in the project editor (not the file browser or dialogs)
-# NP Manager project editor shows smali source, Manifest editor, classes.dex, res/, META-INF
-# Avoid generic words like "Tools", "Decompile", "input.apk" which appear in the file browser too
 PROJECT_KEYWORDS = [
     "Smali", "smali",           # Smali editor tab
-    "AndroidManifest",          # Manifest editor (unique to project)
-    "classes.dex",              # Dex file listed in project tree
-    "META-INF",                 # Project tree entry
-    "res/",                     # Project tree entry (with slash)
+    "AndroidManifest",          # Manifest editor
+    "classes.dex",              # Dex file
+    "META-INF",                 # Project tree
+    "res/",                     # Project tree
+]
+
+# Keywords from the NP Manager FUNCTION tools menu — this is also a "loaded" state
+NP_TOOLS_KEYWORDS = [
+    "SUPER OBFUSCATION",
+    "CONTROL FLOW OBFUSCATION",
+    "APK VM PROTECTION",
+    "RES CONFUSION",
+    "DEX STRING DECRYPTION",
+    "AGAINST DEX CONFUSION",
+    "CHANGE PACKAGE NAME OR CLASS NAME",
+    "ONE-CLICK RANDOMLY SIGN APK",
+    "OBFUSCATE APK",
+    "DEX OBFUSCATION DICTIONARY EXTRACTION",
 ]
 
 def is_project_loaded(xml):
-    # Require at least 2 project-specific signals to avoid false positives
+    # Check classic project editor signals
     matches = [kw for kw in PROJECT_KEYWORDS if kw in xml]
-    return len(matches) >= 2
+    if len(matches) >= 2:
+        return True
+    # Also accept: NP Manager FUNCTION tools menu (we're in with the APK loaded)
+    tools_matches = [kw for kw in NP_TOOLS_KEYWORDS if kw in xml]
+    if len(tools_matches) >= 2:
+        return True
+    return False
 
 def find_any_bounds(xml):
     """Return all (text, cx, cy) tuples from clickable nodes."""
@@ -811,48 +829,104 @@ def open_apk():
     print(f"[TIMEOUT_NODES] {[n for n in nodes_final if n[0].strip()][:30]}")
     return False
 
-def run_tools():
-    tools = [
-        ("Encrypt Resource", ["Encrypt", "Resource", "\u52a0\u5bc6"]),
-        ("Anti-APK Pseudo", ["Anti-APK", "Pseudo", "\u53cd\u4f2a"]),
-        ("RES Anti-VT", ["RES Anti", "Anti-VT", "RES"]),
-        ("Anti-Pseudo Trace", ["Anti-Pseudo", "Pseudo Trace", "\u53cd\u8ffd\u8e2a"]),
-        ("Custom ARSC", ["Custom ARSC", "Customize", "\u81ea\u5b9a\u4e49"]),
-        ("VM Protection", ["VM", "Virtual Machine", "\u865a\u62df\u673a"]),
-        ("Dex2C", ["Dex2C", "Native", "DEX"]),
-    ]
-    for tool_name, keywords in tools:
-        print(f"\n[*] === {tool_name} ===")
-        screenshot(f"np_{tool_name.replace(' ','_')[:20]}")
-        xml = get_xml()
-        tools_tab = find_text(xml, "Tools") or find_text(xml, "\u5de5\u5177")
-        if tools_tab:
-            adb(f"shell input tap {tools_tab[0]} {tools_tab[1]}")
-        else:
-            tap_rel(0.7, 0.06, "Tools fallback")
-        time.sleep(2)
-        xml = get_xml()
-        tool_tapped = False
-        for kw in keywords:
-            if tap_text(xml, kw, f"Tool: {kw}"):
-                tool_tapped = True
-                break
-        if not tool_tapped:
-            print(f"[!] {tool_name} not found, skip")
-            back()
-            continue
-        time.sleep(12)
-        screenshot(f"after_{tool_name.replace(' ','_')[:20]}")
-        dismiss_terms()
-        xml = get_xml()
-        (
-            tap_text(xml, "Save", "Save") or tap_text(xml, "\u4fdd\u5b58", "Save") or
-            tap_text(xml, "Apply", "Apply") or tap_text(xml, "OK", "OK") or
-            tap_rel(0.5, 0.92, "Save fallback")
-        )
-        time.sleep(3)
-        back()
+def find_tool_on_screen(tool_name, xml):
+    """Find a tool by exact text match in the XML. Returns (x, y) or None."""
+    nodes = find_any_bounds(xml)
+    for t, x, y in nodes:
+        if t.strip() == tool_name:
+            return (x, y)
+    return None
+
+def scroll_tool_list_and_tap(tool_name):
+    """Scroll the tools list to find and tap a tool. Returns True if tapped."""
+    # Try visible screen first
+    xml = get_xml()
+    pos = find_tool_on_screen(tool_name, xml)
+    if pos:
+        adb(f"shell input tap {pos[0]} {pos[1]}")
+        print(f"[TOOL_TAP] '{tool_name}' @ {pos}")
+        return True
+    # Scroll down and retry (tool list can be long)
+    for _ in range(4):
+        scroll_rel(0.5, 0.8, 0.5, 0.3, 600)
         time.sleep(1)
+        xml = get_xml()
+        pos = find_tool_on_screen(tool_name, xml)
+        if pos:
+            adb(f"shell input tap {pos[0]} {pos[1]}")
+            print(f"[TOOL_TAP_SCROLL] '{tool_name}' @ {pos}")
+            return True
+    # Scroll back to top and retry
+    for _ in range(5):
+        scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
+        time.sleep(0.5)
+    return False
+
+def handle_tool_result():
+    """After tapping a tool, wait for completion and dismiss any result dialog."""
+    time.sleep(3)
+    for _ in range(20):  # up to 40s
+        xml = get_xml()
+        nodes = find_any_bounds(xml)
+        texts = [t.strip() for t,x,y in nodes if t.strip()]
+        print(f"[TOOL_RESULT] {texts[:8]}")
+        # Dismiss result/completion dialogs
+        for kw in ["OK", "确定", "Done", "DONE", "Close", "CLOSE", "Success", "完成",
+                   "Save", "保存", "APPLY", "Apply", "Confirm", "CONFIRM"]:
+            if kw in texts:
+                tap_text(xml, kw, f"Tool done: {kw}")
+                time.sleep(2)
+                return True
+        # If tools list is back — tool completed without a dialog
+        if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
+            print("[TOOL_RESULT] Back on tools list — done")
+            return True
+        # Still working (progress bar, spinner, etc.)
+        time.sleep(2)
+    print("[TOOL_RESULT] Timeout waiting for tool")
+    # Press back to return to tools list
+    adb("shell input keyevent KEYCODE_BACK")
+    time.sleep(2)
+    return False
+
+def run_tools():
+    """Tap 7 anti-detection tools from the NP Manager FUNCTION tools list."""
+    # Actual tool names as they appear in the tools list (from live run 27 observation).
+    # Ordered from most impactful to least, to maximize FUD even if some fail.
+    TOOLS_TO_RUN = [
+        "SUPER OBFUSCATION",
+        "CONTROL FLOW OBFUSCATION",
+        "RES CONFUSION 3.0",
+        "APK VM PROTECTION",
+        "DEX STRING DECRYPTION",
+        "CHANGE PACKAGE NAME OR CLASS NAME",
+        "ONE-CLICK RANDOMLY SIGN APK",
+    ]
+
+    print("\n[*] === Starting NP Manager tools ===")
+    # Scroll to top of tools list first
+    for _ in range(5):
+        scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
+        time.sleep(0.3)
+    time.sleep(1)
+
+    for tool_name in TOOLS_TO_RUN:
+        print(f"\n[TOOL] >>> {tool_name}")
+        screenshot(f"before_{tool_name[:20].replace(' ','_')}")
+        tapped = scroll_tool_list_and_tap(tool_name)
+        if not tapped:
+            print(f"[TOOL] Not found: {tool_name} — skipping")
+            continue
+        time.sleep(3)
+        screenshot(f"after_tap_{tool_name[:20].replace(' ','_')}")
+        handle_tool_result()
+        screenshot(f"done_{tool_name[:20].replace(' ','_')}")
+        # Scroll back to top for next tool
+        for _ in range(5):
+            scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
+            time.sleep(0.3)
+        time.sleep(1)
+
     print("\n[+] All NP tools done")
     return True
 

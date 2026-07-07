@@ -908,16 +908,31 @@ def handle_tool_result():
             return True
 
         # 2. File browser appeared — tool saved output to files directory
-        #    (e.g. after SUPER OBFUSCATION: /sdcard/Android/data/com.wn.app.np/files)
-        if "com.wn.app.np" in xml and ("input_super.apk" in xml or "input.apk" in xml
-                                         or "Folder" in xml or "File：" in xml):
-            print("[TOOL_RESULT] File browser detected — tool completed, pressing BACK to APK info...")
-            adb("shell input keyevent KEYCODE_BACK")
-            time.sleep(3)
-            # Now on APK info screen — re-enter FUNCTION to get to tools list
+        #    Press HOME to exit file browser entirely, then re-enter NP Manager tools list
+        if ("Folder：" in xml or "File：" in xml) and ("input_super.apk" in xml or "/sdcard" in xml or "com.wn.app.np" in xml):
+            print("[TOOL_RESULT] File browser detected — pressing HOME then re-entering NP Manager...")
+            adb("shell input keyevent KEYCODE_HOME")
+            time.sleep(2)
+            # Re-launch NP Manager on the APK info screen
+            adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
+                " -a android.intent.action.VIEW"
+                " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
+                " -t application/vnd.android.package-archive")
+            time.sleep(5)
+            # Dismiss any dialogs
+            for _ in range(3):
+                xml_d = get_xml()
+                for kw in ["CANCEL", "CLOSE", "Close", "NO"]:
+                    if kw in xml_d:
+                        tap_text(xml_d, kw, f"Dismiss {kw}")
+                        time.sleep(1)
+                        break
+                else:
+                    break
+            time.sleep(2)
+            # Should now be on APK info screen — tap FUNCTION
             if reenter_function_tools():
                 return True
-            # If FUNCTION triggered a re-login, relogin() was called — tools list should be visible
             continue
 
         # 3. APK info screen (FUNCTION/VIEW/INSTALL) — got ejected from tools, re-enter

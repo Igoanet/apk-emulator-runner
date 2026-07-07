@@ -895,13 +895,22 @@ def handle_tool_result():
                         break
 
         # Dismiss result/completion dialogs
-        for kw in ["OK", "确定", "Done", "DONE", "Close", "CLOSE", "Success", "完成",
-                   "Save", "保存", "APPLY", "Apply", "Confirm", "CONFIRM", "START",
-                   "Start", "开始", "Run", "RUN", "Execute", "EXECUTE"]:
+        # "CONFIRM" on a config form submits and starts the tool — don't return yet, keep waiting
+        # "OK" / "Done" / "Success" on a result screen = truly done
+        final_done_keywords = ["OK", "确定", "Done", "DONE", "Success", "完成"]
+        submit_keywords = ["CONFIRM", "Confirm", "START", "Start", "开始", "Run", "RUN",
+                          "Execute", "EXECUTE", "APPLY", "Apply", "Save", "保存",
+                          "Close", "CLOSE"]
+        for kw in final_done_keywords:
             if kw in texts:
                 tap_text(xml, kw, f"Tool done: {kw}")
                 time.sleep(3)
                 return True
+        for kw in submit_keywords:
+            if kw in texts:
+                tap_text(xml, kw, f"Tool submit: {kw}")
+                time.sleep(5)  # wait for tool to start/run after submitting
+                break  # don't return — keep waiting for completion
 
         # If tools list is back — tool completed without a dialog
         if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
@@ -945,19 +954,19 @@ def run_tools():
 
     for tool_name in TOOLS_TO_RUN:
         print(f"\n[TOOL] >>> {tool_name}")
-        # Ensure we're on the tools list (not stuck in a sub-screen)
-        xml_chk = get_xml()
-        if not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
-            print("[TOOL] Not on tools list — pressing BACK to recover...")
+        # Ensure we're on the tools list — press BACK up to 3 times if needed
+        for back_try in range(3):
+            xml_chk = get_xml()
+            if any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
+                break
+            print(f"[TOOL] Not on tools list (try {back_try+1}) — pressing BACK...")
             adb("shell input keyevent KEYCODE_BACK")
-            time.sleep(2)
-            adb("shell input keyevent KEYCODE_BACK")
-            time.sleep(2)
+            time.sleep(3)
         # Scroll to top of tools list
-        for _ in range(5):
+        for _ in range(6):
             scroll_rel(0.5, 0.2, 0.5, 0.8, 600)
             time.sleep(0.3)
-        time.sleep(1)
+        time.sleep(1.5)
         screenshot(f"before_{tool_name[:20].replace(' ','_')}")
         tapped = scroll_tool_list_and_tap(tool_name)
         if not tapped:

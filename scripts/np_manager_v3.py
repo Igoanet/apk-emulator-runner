@@ -101,18 +101,34 @@ def install_apk(apk_path, pkg):
     return "Success" in r.stdout or pkg in adb("shell pm list packages").stdout
 
 def dismiss_all_dialogs(max_attempts=10):
-    """Dismiss any dialog/popup blocking the main UI: terms, update notice, announcement, etc."""
+    """Dismiss any dialog/popup blocking the main UI: terms, update notice, announcement, ANR, etc."""
     for i in range(max_attempts):
         xml = get_xml()
         dismissed = False
 
-        # Update dialog: "WAIT UNTIL LATER" / "UPDATE IMMEDIATELY" / "COPY URL"
-        for btn in ["WAIT UNTIL LATER", "Later", "Cancel", "CANCEL", "Skip", "SKIP",
-                    "Close", "CLOSE", "No Thanks", "Dismiss"]:
-            if tap_text(xml, btn, f"Dialog dismiss: {btn}"):
-                time.sleep(1.5)
+        # System ANR dialogs: "isn't responding" -> tap "Wait" to keep app alive
+        if "isn't responding" in xml or "not responding" in xml.lower():
+            print(f"[*] ANR dialog detected (attempt {i+1})")
+            if tap_text(xml, "Wait", "ANR: Wait"):
+                time.sleep(2)
                 dismissed = True
-                break
+            elif tap_text(xml, "Close app", "ANR: Close app"):
+                time.sleep(2)
+                dismissed = True
+            else:
+                # Fallback: press Back
+                adb("shell input keyevent 4")
+                time.sleep(1)
+                dismissed = True
+
+        if not dismissed:
+            # Update dialog: "WAIT UNTIL LATER" / "UPDATE IMMEDIATELY" / "COPY URL"
+            for btn in ["WAIT UNTIL LATER", "Later", "Cancel", "CANCEL", "Skip", "SKIP",
+                        "Close", "CLOSE", "No Thanks", "Dismiss"]:
+                if tap_text(xml, btn, f"Dialog dismiss: {btn}"):
+                    time.sleep(1.5)
+                    dismissed = True
+                    break
 
         if not dismissed:
             # Terms / agreement dialogs
@@ -279,88 +295,106 @@ def find_any_bounds(xml):
         results.append((txt, cx, cy))
     return results
 
+def nav_to_path_in_browser(target_path):
+    """Use NP Manager's path bar to navigate directly to a folder path."""
+    # NP Manager has a tappable path bar at the top showing current path.
+    # Tapping it opens an editable text field where we can type a path.
+    xml = get_xml()
+    nodes = find_any_bounds(xml)
+    path_node = next(((cx, cy) for txt, cx, cy in nodes if "/storage" in txt or "/sdcard" in txt), None)
+    if path_node:
+        adb(f"shell input tap {path_node[0]} {path_node[1]}")
+        time.sleep(1.5)
+        # Clear existing text and type new path
+        adb("shell input keyevent KEYCODE_CTRL_A")
+        time.sleep(0.3)
+        adb(f"shell input text '{target_path}'")
+        time.sleep(0.5)
+        adb("shell input keyevent 66")  # ENTER
+        time.sleep(2)
+        print(f"[NAV] Navigated to {target_path} via path bar")
+        return True
+    else:
+        print(f"[NAV] No path bar found. Nodes: {[t for t,x,y in nodes if t.strip()][:10]}")
+        return False
+
+
 def open_apk():
     print("[*] Opening APK via NP Manager...")
     if not os.path.exists(os.path.expanduser(INPUT_APK)):
         print("[!] Input APK missing")
         return False
 
-    # Push APK to emulator with world-readable permissions
-    # Use /sdcard/NPAPK/ so NP Manager file browser can see it (avoids media_rw filter)
-    adb("shell mkdir -p /sdcard/NPAPK")
-    r_push = adb(f"push '{INPUT_APK}' /sdcard/NPAPK/input.apk")
-    print(f"[PUSH] {r_push.stdout.strip()[:100]} {r_push.stderr.strip()[:100]}")
-    adb("shell chmod 644 /sdcard/NPAPK/input.apk")
-    # Also place a copy in Download with 644 for ACTION_VIEW fallback
-    adb("shell cp /sdcard/NPAPK/input.apk /sdcard/Download/input.apk")
-    adb("shell chmod 644 /sdcard/Download/input.apk")
+    # STRATEGY: Push APK to NP Manager's own app directory so its file browser can see it.
+    # adb push always sets media_rw group; Android shell chmod can't change it.
+    # NP Manager's external files dir is /sdcard/Android/data/com.wn.app.np/files/ — it owns it.
+    NP_FILES_DIR = f"/sdcard/Android/data/{NP_PACKAGE}/files"
+    adb(f"shell mkdir -p {NP_FILES_DIR}")
+    r_push = adb(f"push '{INPUT_APK}' {NP_FILES_DIR}/input.apk")
+    print(f"[PUSH] {r_push.stdout.strip()[:150]} {r_push.stderr.strip()[:150]}")
     time.sleep(1)
-    r_ls = adb("shell ls -la /sdcard/NPAPK/ /sdcard/Download/input.apk")
-    print(f"[LS] {r_ls.stdout.strip()[:300]}")
+    r_ls = adb(f"shell ls -la {NP_FILES_DIR}/")
+    print(f"[LS_NPFILES] {r_ls.stdout.strip()[:300]}")
 
     # Re-launch NP Manager fresh
     adb(f"shell am force-stop {NP_PACKAGE}")
     time.sleep(1)
     adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
-    time.sleep(5)
+    time.sleep(6)
 
-    # Dismiss ALL dialogs (update notice, announcement, terms, etc.)
-    dismiss_all_dialogs(max_attempts=12)
+    # Dismiss ALL dialogs including ANR (Pixel Launcher isn't responding)
+    dismiss_all_dialogs(max_attempts=15)
     time.sleep(1)
 
     screenshot("np_main_screen")
     xml = get_xml(save_as="01_after_login")
-
     nodes_main = find_any_bounds(xml)
-    print(f"[NODES_MAIN] {nodes_main[:30]}")
+    print(f"[NODES_MAIN] {[n for n in nodes_main if n[0].strip()][:15]}")
 
-    # NP Manager opens directly in its file browser at /storage/emulated/0
-    # We need to: tap "Download" folder -> tap "input.apk" file -> wait for project load
+    # Check if we're still stuck on an ANR or other system dialog
+    if "isn't responding" in xml or "not responding" in xml.lower():
+        print("[!] ANR still showing — tapping Wait")
+        tap_text(xml, "Wait", "ANR Wait final")
+        time.sleep(3)
+        xml = get_xml()
+        nodes_main = find_any_bounds(xml)
 
-    # NP Manager file browser starts at /storage/emulated/0
-    # We placed input.apk in /sdcard/NPAPK/ with chmod 644
-    # Navigate: NPAPK folder -> input.apk -> tap -> handle any open/decompile dialog
-
-    # Step 1: Navigate to NPAPK folder (should appear in file browser list)
-    print("[*] Navigating to NPAPK folder in NP Manager file browser...")
-    if not tap_text(xml, "NPAPK", "NPAPK folder"):
-        # Not visible yet — scroll down or try typing path in address bar
-        for txt, cx, cy in nodes_main:
-            if "NPAPK" in txt:
-                adb(f"shell input tap {cx} {cy}")
-                print(f"[*] Tapped NPAPK node '{txt}' @ ({cx},{cy})")
-                break
-        else:
-            # Try tapping the path bar and typing the path directly
-            path_bar = find_text(xml, "/storage/emulated/0")
-            if not path_bar:
-                path_bar = next(((cx,cy) for txt,cx,cy in nodes_main if "/storage" in txt), None)
-            if path_bar:
-                adb(f"shell input tap {path_bar[0]} {path_bar[1]}")
-                time.sleep(1)
-                adb(f"shell input text /sdcard/NPAPK/")
-                time.sleep(1)
-                adb("shell input keyevent 66")  # Enter
-            else:
-                # Scroll up to see all folders
-                scroll_rel(0.5, 0.3, 0.5, 0.7, 500)
-                time.sleep(1)
-                xml = get_xml()
-                tap_text(xml, "NPAPK", "NPAPK after scroll")
+    # NP Manager opens at /storage/emulated/0
+    # We need to navigate to /sdcard/Android/data/com.wn.app.np/files/ where input.apk lives
+    # Strategy 1: tap path bar and type path directly
+    print("[*] Navigating to NP Manager files dir via path bar...")
+    nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
     time.sleep(2)
 
-    screenshot("inside_npapk")
-    xml = get_xml(save_as="02_npapk_contents")
-    nodes_dl = find_any_bounds(xml)
-    print(f"[NODES_NPAPK] {[n for n in nodes_dl if n[0].strip()]}")
+    screenshot("inside_np_files")
+    xml = get_xml(save_as="02_np_files_contents")
+    nodes_f = find_any_bounds(xml)
+    visible = [n for n in nodes_f if n[0].strip()]
+    print(f"[NODES_NP_FILES] {visible}")
 
     if is_project_loaded(xml):
-        print("[+] Project loaded!")
+        print("[+] Project already loaded!")
         return True
 
-    # Step 2: Tap input.apk in the NPAPK folder
+    # Strategy 2: if nav failed (still at root), try Download folder navigation
+    path_header = next((t for t,x,y in visible if "/storage" in t or "/sdcard" in t or "Android" in t), None)
+    print(f"[CURR_PATH] {path_header}")
+    if not path_header or "files" not in str(path_header):
+        print("[*] Path bar nav failed — trying Download fallback...")
+        # Go back to root and tap Download
+        adb("shell input keyevent 4")  # Back
+        time.sleep(1)
+        xml = get_xml()
+        tap_text(xml, "Download", "Download folder")
+        time.sleep(2)
+        xml = get_xml(save_as="02b_download")
+        nodes_f = find_any_bounds(xml)
+        visible = [n for n in nodes_f if n[0].strip()]
+        print(f"[NODES_DL] {visible}")
+
+    # Step 2: Tap input.apk
     apk_tapped = False
-    for txt, cx, cy in nodes_dl:
+    for txt, cx, cy in nodes_f:
         if "input" in txt.lower() or ".apk" in txt.lower():
             adb(f"shell input tap {cx} {cy}")
             print(f"[*] Tapped APK '{txt}' @ ({cx},{cy})")
@@ -369,28 +403,30 @@ def open_apk():
             break
 
     if apk_tapped:
-        # After tapping an APK in NP Manager's browser, it may show a dialog:
-        # "Decompile", "APK Info", "Open as text" etc.
+        # After tapping an APK in NP Manager's browser it shows a context dialog
         xml3 = get_xml(save_as="03_after_apk_tap")
         nodes3 = find_any_bounds(xml3)
         print(f"[NODES_AFTER_TAP] {[n for n in nodes3 if n[0].strip()]}")
-        # Tap "Decompile" or similar to open as project
-        for kw in ["Decompile", "decompile", "反编译", "Open", "Project", "Editor", "OK", "确定"]:
+        # Tap "Decompile" / "反编译" / first option to open as project
+        for kw in ["Decompile", "decompile", "反编译", "Open project", "Project", "Editor", "OK", "确定"]:
             if tap_text(xml3, kw, f"APK dialog: {kw}"):
                 time.sleep(3)
                 break
     else:
-        print(f"[!] input.apk not found in NPAPK folder. Current path header check:")
-        path_node = next(((t,x,y) for t,x,y in nodes_dl if "/storage" in t or "NPAPK" in t), None)
-        print(f"[PATH] {path_node}")
-        r_ls2 = adb("shell ls -la /sdcard/NPAPK/")
-        print(f"[LS_NPAPK] {r_ls2.stdout.strip()}")
+        print(f"[!] input.apk still not visible.")
+        r_ls2 = adb(f"shell ls -la {NP_FILES_DIR}/ /sdcard/Download/ 2>&1")
+        print(f"[LS_BOTH] {r_ls2.stdout.strip()[:400]}")
 
     # Step 3: Wait for project editor/decompile UI to load (up to 90s)
     print("[*] Waiting for project editor...")
     for i in range(45):
         time.sleep(2)
         xml = get_xml()
+        # Dismiss any ANR that reappears
+        if "isn't responding" in xml:
+            tap_text(xml, "Wait", "ANR Wait loop")
+            time.sleep(1)
+            continue
         if is_project_loaded(xml):
             print(f"[+] Project loaded! ({i*2}s)")
             return True
@@ -398,9 +434,9 @@ def open_apk():
         visible = [n for n in nodes_w if n[0].strip()]
         if i % 5 == 0:
             print(f"[WAIT_{i*2}s] {visible[:10]}")
-        # Handle any dialog that appeared
+        # Dismiss decompile/open dialogs
         for kw in ["Decompile", "decompile", "反编译", "OK", "确定", "Open", "Continue"]:
-            if any(kw in t for t,x,y in visible):
+            if any(kw in t for t, x, y in visible):
                 tap_text(xml, kw, f"Dialog: {kw}")
                 time.sleep(2)
                 break

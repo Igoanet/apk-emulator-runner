@@ -295,17 +295,43 @@ def find_any_bounds(xml):
         results.append((txt, cx, cy))
     return results
 
+def clear_text_field_and_type(field_x, field_y, new_text):
+    """Clear an Android text field and type new text.
+    
+    Strategy: tap to focus, move to end, send many DEL keycodes to clear,
+    verify cleared, then type new text.
+    """
+    # Focus the field
+    adb(f"shell input tap {field_x} {field_y}")
+    time.sleep(0.5)
+    # Move cursor to end of existing text
+    adb("shell input keyevent KEYCODE_MOVE_END")
+    time.sleep(0.2)
+    # Send 80 DEL keycodes (each as separate keyevent for reliability)
+    # /storage/emulated/0 = 21 chars; our longest path = 45 chars
+    del_events = " ".join(["KEYCODE_DEL"] * 50)
+    adb(f"shell input keyevent {del_events}")
+    time.sleep(0.3)
+    # Send another batch for good measure
+    adb(f"shell input keyevent {del_events}")
+    time.sleep(0.3)
+    # Now type new text
+    adb(f"shell input text '{new_text}'")
+    time.sleep(0.5)
+    print(f"[FIELD] Cleared and typed: {new_text}")
+
+
 def nav_to_path_in_browser(target_path):
     """Use NP Manager's 'Jump to Path' dialog to navigate directly to a folder.
     
     Workflow:
     1. Tap path bar (shows /storage/emulated/0) -> opens 'Jump to Path' dialog
-    2. Dialog has: title 'Jump to Path', text field with current path, CANCEL, CONFIRM buttons
-    3. Tap text field, select all, type new path, then tap CONFIRM by its actual coordinates
+    2. Dialog has: title, text field with current path, CANCEL, CONFIRM buttons
+    3. Clear the text field completely, type new path, tap CONFIRM at pre-captured coords
     """
     xml = get_xml()
     nodes = find_any_bounds(xml)
-    # Find path bar node — the one showing /storage/emulated/0
+    # Find path bar node — shows /storage/emulated/0
     path_node = next(((cx, cy) for txt, cx, cy in nodes if "/storage" in txt or ("/sdcard" in txt and "Android" not in txt)), None)
     if not path_node:
         print(f"[NAV] No path bar. Nodes: {[t for t,x,y in nodes if t.strip()][:10]}")
@@ -319,43 +345,35 @@ def nav_to_path_in_browser(target_path):
     nodes2 = find_any_bounds(xml2)
     print(f"[NAV_DIALOG] {[n for n in nodes2 if n[0].strip()]}")
 
-    # Check "Jump to Path" dialog is open
     if "Jump to Path" not in xml2:
         print("[NAV] 'Jump to Path' dialog not found")
         return False
 
-    # Find CONFIRM button coordinates from THIS xml (before typing)
+    # Capture CONFIRM button position BEFORE typing (keyboard may shift it)
     confirm_pos = next(((cx, cy) for txt, cx, cy in nodes2 if txt == "CONFIRM"), None)
     print(f"[NAV_CONFIRM_POS] {confirm_pos}")
 
-    # Tap the text field to focus it (it contains current path text)
+    # Find the text field in the dialog
     path_field_pos = next(((cx, cy) for txt, cx, cy in nodes2 if "/storage" in txt or "/sdcard" in txt), None)
-    if path_field_pos:
-        adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
-        time.sleep(0.5)
-    # Triple-tap to select all text in field
-    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
-    time.sleep(0.1)
-    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
-    time.sleep(0.1)
-    adb(f"shell input tap {path_field_pos[0]} {path_field_pos[1]}")
-    time.sleep(0.3)
-    # Select all and delete
-    adb("shell input keyevent KEYCODE_CTRL_A")
-    time.sleep(0.2)
-    adb("shell input keyevent KEYCODE_DEL")
-    time.sleep(0.2)
-    # Type target path
-    adb(f"shell input text '{target_path}'")
-    time.sleep(0.5)
+    if not path_field_pos:
+        print("[NAV] No path field found in dialog")
+        return False
 
-    # Tap CONFIRM using coordinates captured BEFORE typing (keyboard won't shift dialog)
+    # Clear field and type target path
+    clear_text_field_and_type(path_field_pos[0], path_field_pos[1], target_path)
+
+    # Read the field content after typing to verify
+    xml_check = get_xml()
+    nodes_check = find_any_bounds(xml_check)
+    field_now = next((t for t,x,y in nodes_check if "/sdcard" in t or "/storage" in t or "Android" in t), "?")
+    print(f"[NAV_FIELD_AFTER_TYPE] '{field_now}'")
+
+    # Tap CONFIRM using coordinates captured before typing
     if confirm_pos:
         adb(f"shell input tap {confirm_pos[0]} {confirm_pos[1]}")
         print(f"[NAV] Tapped CONFIRM @ {confirm_pos}")
         time.sleep(2)
     else:
-        # Fallback: press Enter
         adb("shell input keyevent 66")
         print("[NAV] Pressed Enter (no CONFIRM found)")
         time.sleep(2)
@@ -365,7 +383,7 @@ def nav_to_path_in_browser(target_path):
     nodes3 = find_any_bounds(xml3)
     curr = next((t for t,x,y in nodes3 if "/storage" in t or "/sdcard" in t), "unknown")
     print(f"[NAV_RESULT] Now at: {curr}")
-    return True
+    return "files" in curr or target_path in curr
 
 
 def open_apk():
@@ -374,16 +392,22 @@ def open_apk():
         print("[!] Input APK missing")
         return False
 
-    # STRATEGY: Push APK to NP Manager's own app directory so its file browser can see it.
-    # adb push always sets media_rw group; Android shell chmod can't change it.
-    # NP Manager's external files dir is /sdcard/Android/data/com.wn.app.np/files/ — it owns it.
+    # STRATEGY: Push APK to /sdcard/Download/ — world-readable, NP Manager can browse it.
+    # Also push to NP's own app dir as backup.
+    DL_DIR = "/sdcard/Download"
     NP_FILES_DIR = f"/sdcard/Android/data/{NP_PACKAGE}/files"
     adb(f"shell mkdir -p {NP_FILES_DIR}")
+    
+    # Push to Download (primary — NP Manager's file browser shows Download contents)
+    r_push_dl = adb(f"push '{INPUT_APK}' {DL_DIR}/input.apk")
+    print(f"[PUSH_DL] {r_push_dl.stdout.strip()[:150]} {r_push_dl.stderr.strip()[:150]}")
+    
+    # Push to NP app dir as secondary
     r_push = adb(f"push '{INPUT_APK}' {NP_FILES_DIR}/input.apk")
-    print(f"[PUSH] {r_push.stdout.strip()[:150]} {r_push.stderr.strip()[:150]}")
+    print(f"[PUSH_NP] {r_push.stdout.strip()[:150]} {r_push.stderr.strip()[:150]}")
     time.sleep(1)
-    r_ls = adb(f"shell ls -la {NP_FILES_DIR}/")
-    print(f"[LS_NPFILES] {r_ls.stdout.strip()[:300]}")
+    r_ls = adb(f"shell ls -la {DL_DIR}/ {NP_FILES_DIR}/")
+    print(f"[LS_BOTH] {r_ls.stdout.strip()[:500]}")
 
     # Re-launch NP Manager fresh
     adb(f"shell am force-stop {NP_PACKAGE}")
@@ -409,37 +433,43 @@ def open_apk():
         nodes_main = find_any_bounds(xml)
 
     # NP Manager opens at /storage/emulated/0
-    # We need to navigate to /sdcard/Android/data/com.wn.app.np/files/ where input.apk lives
-    # Strategy 1: tap path bar and type path directly
-    print("[*] Navigating to NP Manager files dir via path bar...")
-    nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
-    time.sleep(2)
+    # Strategy 1: tap Download folder directly (APK is there, and it's always visible)
+    print("[*] Looking for Download folder in main view...")
+    xml = get_xml(save_as="01b_check_download")
+    nodes_root = find_any_bounds(xml)
+    dl_tapped = False
+    for txt, cx, cy in nodes_root:
+        if txt.strip() == "Download":
+            adb(f"shell input tap {cx} {cy}")
+            print(f"[*] Tap Download folder @ ({cx},{cy})")
+            dl_tapped = True
+            time.sleep(2)
+            break
+    if not dl_tapped:
+        print("[*] Download not found, trying path bar navigation to Download...")
+        nav_ok = nav_to_path_in_browser("/sdcard/Download")
+        time.sleep(2)
 
-    screenshot("inside_np_files")
-    xml = get_xml(save_as="02_np_files_contents")
+    screenshot("inside_download")
+    xml = get_xml(save_as="02_download_contents")
     nodes_f = find_any_bounds(xml)
     visible = [n for n in nodes_f if n[0].strip()]
-    print(f"[NODES_NP_FILES] {visible}")
+    print(f"[NODES_DL] {visible}")
 
     if is_project_loaded(xml):
         print("[+] Project already loaded!")
         return True
 
-    # Strategy 2: if nav failed (still at root), try Download folder navigation
-    path_header = next((t for t,x,y in visible if "/storage" in t or "/sdcard" in t or "Android" in t), None)
-    print(f"[CURR_PATH] {path_header}")
-    if not path_header or "files" not in str(path_header):
-        print("[*] Path bar nav failed — trying Download fallback...")
-        # Go back to root and tap Download
-        adb("shell input keyevent 4")  # Back
-        time.sleep(1)
-        xml = get_xml()
-        tap_text(xml, "Download", "Download folder")
+    # If APK not visible in Download, try navigating to NP files dir
+    has_apk = any("input" in t.lower() or ".apk" in t.lower() for t,x,y in nodes_f)
+    if not has_apk:
+        print("[*] APK not in Download, trying NP files dir via path bar...")
+        nav_ok = nav_to_path_in_browser(NP_FILES_DIR)
         time.sleep(2)
-        xml = get_xml(save_as="02b_download")
+        xml = get_xml(save_as="02b_np_files")
         nodes_f = find_any_bounds(xml)
         visible = [n for n in nodes_f if n[0].strip()]
-        print(f"[NODES_DL] {visible}")
+        print(f"[NODES_NP_FILES] {visible}")
 
     # Step 2: Tap input.apk
     apk_tapped = False

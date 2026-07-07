@@ -554,11 +554,12 @@ def open_apk():
         if is_project_loaded(xml3):
             print("[+] Project editor opened immediately!")
             return True
-        # Tap the first action word we find in the dialog
+        # NP Manager shows an APK info screen with FUNCTION / VIEW / INSTALL buttons.
+        # FUNCTION = opens the project editor / tools menu — tap it first.
         tapped_dialog = False
-        for kw in ["Decompile", "decompile", "反编译", "Open project", "Project", "Editor",
-                   "OK", "确定", "Open", "Start", "开始", "Import", "导入"]:
-            if tap_text(xml3, kw, f"APK dialog: {kw}"):
+        for kw in ["FUNCTION", "功能", "Decompile", "decompile", "反编译", "Open project",
+                   "Project", "Editor", "OK", "确定", "Open", "Start", "开始", "Import", "导入"]:
+            if tap_text(xml3, kw, f"APK info: {kw}"):
                 tapped_dialog = True
                 time.sleep(5)
                 break

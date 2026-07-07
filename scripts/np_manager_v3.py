@@ -937,26 +937,34 @@ def handle_tool_result():
             submitted = False  # reset — now on config form
             continue
 
-        # 5. Progress indicator (编译中 = "compiling", percentage, X/Y counters)
-        if any("编译中" in t or ("%" in t and len(t) < 10) or "/" in t for t in texts):
-            print(f"[TOOL_RESULT] Processing... ({texts[:3]})")
-            time.sleep(4)
-            continue
-
-        # 6. CONFIRM / START on a config form → submit (only once, then keep waiting)
+        # 5. CONFIRM / START on a config form → submit (only once per submission cycle)
         submit_kws = ["CONFIRM", "Confirm", "START", "Start", "开始", "Run", "RUN",
                       "Execute", "EXECUTE"]
+        tapped_submit = False
         for kw in submit_kws:
             if kw in texts:
                 if not submitted:
                     tap_text(xml, kw, f"Tool submit: {kw}")
                     submitted = True
+                    tapped_submit = True
                     time.sleep(6)
                 else:
-                    # Already submitted but CONFIRM still showing — screen didn't advance
-                    # Could be a stuck dialog, try tapping again after short wait
-                    time.sleep(3)
+                    # Still seeing CONFIRM after submission — re-tap to push through
+                    tap_text(xml, kw, f"Tool re-submit: {kw}")
+                    tapped_submit = True
+                    time.sleep(6)
                 break
+        if tapped_submit:
+            continue
+
+        # 6. Progress indicator (编译中 = "compiling", percentage, X/Y numeric counters)
+        # Only match actual numeric progress like "7396/7397" or "45%" — not file paths
+        import re as _re
+        if any("编译中" in t or (_re.search(r'\d+%', t) and len(t) < 10)
+               or _re.search(r'\d+/\d+', t) for t in texts):
+            print(f"[TOOL_RESULT] Processing... ({texts[:3]})")
+            time.sleep(4)
+            continue
 
         # 7. Final OK/Done/Success dialogs
         for kw in ["OK", "确定", "Done", "DONE", "Success", "完成", "Close", "CLOSE"]:

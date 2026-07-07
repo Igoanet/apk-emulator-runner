@@ -903,26 +903,43 @@ def wait_for_apk_info_and_enter_function():
 
 def recover_from_file_browser():
     """Called when file browser is detected after a tool completes.
-    Launches NP Manager APK info screen and gets back to tools list."""
-    print("[FILE_BROWSER] Tool done — launching NP Manager APK info screen...")
-    # Launch NP Manager directly on the APK installer screen for input.apk
+    Press BACK repeatedly to exit all file browser levels back to APK info screen."""
+    print("[FILE_BROWSER] Tool done — pressing BACK x10 to exit file browser levels...")
+    # The file browser nests: files/ → com.wn.app.np/ → Android/data/ → Android/ → sdcard/ → / → APK info
+    # Press BACK up to 10 times, stopping when we detect APK info screen or tools list
+    for back_n in range(10):
+        adb("shell input keyevent KEYCODE_BACK")
+        time.sleep(2)
+        xml_b = get_xml()
+        texts_b = [t.strip() for t,x,y in find_any_bounds(xml_b) if t.strip()]
+        print(f"[FILE_BROWSER] BACK {back_n+1}: {texts_b[:3]}")
+        # Reached tools list
+        if any(kw in xml_b for kw in NP_TOOLS_KEYWORDS):
+            print("[FILE_BROWSER] Reached tools list")
+            return True
+        # Reached APK info screen (FUNCTION button visible)
+        if "FUNCTION" in texts_b and ("VIEW" in texts_b or "INSTALL" in texts_b):
+            print(f"[FILE_BROWSER] Reached APK info screen after {back_n+1} BACKs")
+            return wait_for_apk_info_and_enter_function()
+        # Reached home screen — re-launch NP Manager
+        HOME_IND = ["Gmail", "Chrome", "YouTube", "Phone", "Messages"]
+        if sum(1 for h in HOME_IND if h in xml_b) >= 2:
+            print("[FILE_BROWSER] Reached home screen — launching NP Manager APK info...")
+            adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
+                " -a android.intent.action.VIEW"
+                " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
+                " -t application/vnd.android.package-archive")
+            time.sleep(7)
+            return wait_for_apk_info_and_enter_function()
+        # Still in file browser — press BACK again (loop continues)
+    print("[FILE_BROWSER] Gave up — pressing HOME and re-launching")
+    adb("shell input keyevent KEYCODE_HOME")
+    time.sleep(2)
     adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
         " -a android.intent.action.VIEW"
         " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
         " -t application/vnd.android.package-archive")
-    time.sleep(6)
-    # Dismiss any stale dialogs (CANCEL, CLOSE)
-    for _ in range(3):
-        xml_d = get_xml()
-        dismissed = False
-        for kw in ["CANCEL", "CLOSE", "Close", "NO", "Later", "LATER"]:
-            if kw in xml_d:
-                tap_text(xml_d, kw, f"Dismiss dialog: {kw}")
-                time.sleep(1)
-                dismissed = True
-                break
-        if not dismissed:
-            break
+    time.sleep(7)
     return wait_for_apk_info_and_enter_function()
 
 def handle_tool_result():

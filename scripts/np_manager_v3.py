@@ -1096,26 +1096,67 @@ def handle_tool_result():
             nodes_vm = find_any_bounds(xml_vm)
             texts_vm = [t.strip() for t, x, y in nodes_vm if t.strip()]
             print(f"[APK_VM] After scroll, visible: {texts_vm[:14]}")
-            # Uncheck all ABIs that don't exist in the APK, then check the target
+            # Read checkbox state from XML — only tap what needs to change
             ALL_ABIS = ["armeabi-v7a", "arm64-v8a", "x86_64", "x86"]
+            import xml.etree.ElementTree as ET_abi
+            try:
+                root_abi = ET_abi.fromstring(xml_vm)
+            except Exception:
+                root_abi = None
+            # Build map: abi_name → (x, y, is_checked)
+            abi_state = {}
+            if root_abi is not None:
+                for node in root_abi.iter():
+                    txt = (node.get("text") or "").strip()
+                    if txt in ALL_ABIS:
+                        bounds = node.get("bounds", "")
+                        checked = node.get("checked", "false").lower() == "true"
+                        # Try to get bounds from this node or parent
+                        bx, by = 540, 0
+                        if bounds:
+                            import re as re_abi
+                            m = re_abi.findall(r'\d+', bounds)
+                            if len(m) >= 4:
+                                bx = (int(m[0]) + int(m[2])) // 2
+                                by = (int(m[1]) + int(m[3])) // 2
+                        else:
+                            # Fall back to find_any_bounds match
+                            for ntxt, nx, ny in nodes_vm:
+                                if ntxt.strip() == txt:
+                                    bx, by = nx, ny
+                                    break
+                        abi_state[txt] = (bx, by, checked)
+                        print(f"[APK_VM] Found checkbox '{txt}' @ ({bx},{by}) checked={checked}")
+            # If XML parse failed, fall back to simple tap of target
+            if not abi_state:
+                for ntxt, nx, ny in nodes_vm:
+                    if ntxt.strip() in ALL_ABIS:
+                        abi_state[ntxt.strip()] = (nx, ny, ntxt.strip() == "armeabi-v7a")
             tapped_abi = False
-            for txt, x, y in nodes_vm:
-                abi_match = next((a for a in ALL_ABIS if a == txt.strip()), None)
-                if abi_match is None:
-                    continue
-                if abi_match == target_abi:
-                    # Tap to ensure it's checked
-                    adb(f"shell input tap {x} {y}")
-                    print(f"[APK_VM] Checked target ABI: {target_abi} @ ({x},{y})")
+            for abi, (x, y, is_checked) in abi_state.items():
+                if abi == target_abi:
+                    if not is_checked:
+                        adb(f"shell input tap {x} {y}")
+                        print(f"[APK_VM] Checked target ABI: {target_abi} @ ({x},{y})")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[APK_VM] Target ABI already checked: {target_abi}")
                     tapped_abi = True
-                    time.sleep(0.5)
                 else:
-                    # Tap to uncheck any non-target ABI (armeabi-v7a is checked by default)
-                    adb(f"shell input tap {x} {y}")
-                    print(f"[APK_VM] Unchecked non-target ABI: {abi_match} @ ({x},{y})")
-                    time.sleep(0.5)
+                    if is_checked:
+                        adb(f"shell input tap {x} {y}")
+                        print(f"[APK_VM] Unchecked non-target ABI: {abi} @ ({x},{y})")
+                        time.sleep(0.5)
+                    else:
+                        print(f"[APK_VM] Non-target ABI already unchecked: {abi}")
             if not tapped_abi:
-                print(f"[APK_VM] Target ABI '{target_abi}' not found on screen — using default")
+                print(f"[APK_VM] Target ABI '{target_abi}' not found — trying direct tap")
+                for ntxt, nx, ny in nodes_vm:
+                    if ntxt.strip() == target_abi:
+                        adb(f"shell input tap {nx} {ny}")
+                        print(f"[APK_VM] Fallback tapped: {target_abi} @ ({nx},{ny})")
+                        tapped_abi = True
+                        break
             time.sleep(1)
             # Scroll back up to CONFIRM
             for _ in range(4):

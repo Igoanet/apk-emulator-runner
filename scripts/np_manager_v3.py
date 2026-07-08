@@ -1069,7 +1069,41 @@ def handle_tool_result():
             submitted = False  # reset — now on config form
             continue
 
-        # 4b. CHANGE PACKAGE NAME config — fill in real old package name from APK info screen
+        # 4b. APK VM PROTECTION config — scroll to ABI section and check all 4 options
+        if any("customize the vm" in t.lower() for t in texts) and not submitted:
+            print("[APK_VM] APK VM config screen detected — selecting all ABI options...")
+            # Scroll down to reveal ABI checkboxes (they are below the visible area)
+            for _ in range(4):
+                scroll_rel(0.5, 0.8, 0.5, 0.3, 600)
+                time.sleep(0.5)
+            time.sleep(1)
+            xml_vm = get_xml()
+            nodes_vm = find_any_bounds(xml_vm)
+            texts_vm = [t.strip() for t, x, y in nodes_vm if t.strip()]
+            print(f"[APK_VM] After scroll, visible: {texts_vm[:12]}")
+            # Tap each ABI option that's visible (they are checkboxes — tapping toggles them)
+            ABI_OPTIONS = ["armeabi-v7a", "arm64-v8a", "x86_64", "x86"]
+            for abi in ABI_OPTIONS:
+                for txt, x, y in nodes_vm:
+                    if abi in txt.strip():
+                        adb(f"shell input tap {x} {y}")
+                        print(f"[APK_VM] Tapped ABI: {abi} @ ({x},{y})")
+                        time.sleep(0.5)
+                        break
+                else:
+                    print(f"[APK_VM] ABI option not visible: {abi}")
+            time.sleep(1)
+            # Scroll back up to find CONFIRM button
+            for _ in range(4):
+                scroll_rel(0.5, 0.3, 0.5, 0.8, 600)
+                time.sleep(0.3)
+            time.sleep(0.5)
+            tap_text(get_xml(), "CONFIRM", "APK_VM submit")
+            submitted = True
+            time.sleep(6)
+            continue
+
+        # 4c. CHANGE PACKAGE NAME config — fill in real old package name from APK info screen
         if "Old Package name:" in texts and not submitted:
             nodes_pkg = find_any_bounds(xml)
             # Find the y-coordinate of the "Old Package name:" label

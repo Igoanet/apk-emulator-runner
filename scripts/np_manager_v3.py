@@ -1096,15 +1096,24 @@ def handle_tool_result():
             nodes_vm = find_any_bounds(xml_vm)
             texts_vm = [t.strip() for t, x, y in nodes_vm if t.strip()]
             print(f"[APK_VM] After scroll, visible: {texts_vm[:14]}")
-            # Tap only the target ABI radio button
+            # Uncheck all ABIs that don't exist in the APK, then check the target
+            ALL_ABIS = ["armeabi-v7a", "arm64-v8a", "x86_64", "x86"]
             tapped_abi = False
             for txt, x, y in nodes_vm:
-                if txt.strip() == target_abi:
+                abi_match = next((a for a in ALL_ABIS if a == txt.strip()), None)
+                if abi_match is None:
+                    continue
+                if abi_match == target_abi:
+                    # Tap to ensure it's checked
                     adb(f"shell input tap {x} {y}")
-                    print(f"[APK_VM] Tapped ABI: {target_abi} @ ({x},{y})")
+                    print(f"[APK_VM] Checked target ABI: {target_abi} @ ({x},{y})")
                     tapped_abi = True
                     time.sleep(0.5)
-                    break
+                else:
+                    # Tap to uncheck any non-target ABI (armeabi-v7a is checked by default)
+                    adb(f"shell input tap {x} {y}")
+                    print(f"[APK_VM] Unchecked non-target ABI: {abi_match} @ ({x},{y})")
+                    time.sleep(0.5)
             if not tapped_abi:
                 print(f"[APK_VM] Target ABI '{target_abi}' not found on screen — using default")
             time.sleep(1)

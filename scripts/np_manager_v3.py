@@ -1069,10 +1069,25 @@ def handle_tool_result():
             submitted = False  # reset — now on config form
             continue
 
-        # 4b. APK VM PROTECTION config — scroll to ABI section and check all 4 options
+        # 4b. APK VM PROTECTION config — detect APK's real ABIs, select matching one
         if any("customize the vm" in t.lower() for t in texts) and not submitted:
-            print("[APK_VM] APK VM config screen detected — selecting all ABI options...")
-            # Scroll down to reveal ABI checkboxes (they are below the visible area)
+            print("[APK_VM] APK VM config screen detected — detecting APK ABIs...")
+            # Check which lib/ folders exist in the APK to know which ABIs it supports
+            apk_path = f"/sdcard/Android/data/{NP_PACKAGE}/files/input.apk"
+            r_abi = adb(f"shell unzip -l {apk_path} 2>/dev/null | grep 'lib/'")
+            abi_raw = r_abi.stdout
+            print(f"[APK_VM] APK lib folders: {abi_raw[:300]}")
+            # Determine which ABI to select (prefer x86_64 > arm64-v8a > x86 > armeabi-v7a)
+            ABI_PRIORITY = ["x86_64", "arm64-v8a", "x86", "armeabi-v7a"]
+            target_abi = None
+            for abi in ABI_PRIORITY:
+                if abi in abi_raw:
+                    target_abi = abi
+                    break
+            if not target_abi:
+                target_abi = "x86_64"  # emulator default fallback
+            print(f"[APK_VM] Selected ABI: {target_abi}")
+            # Scroll down to reveal ABI radio buttons
             for _ in range(4):
                 scroll_rel(0.5, 0.8, 0.5, 0.3, 600)
                 time.sleep(0.5)
@@ -1080,20 +1095,20 @@ def handle_tool_result():
             xml_vm = get_xml()
             nodes_vm = find_any_bounds(xml_vm)
             texts_vm = [t.strip() for t, x, y in nodes_vm if t.strip()]
-            print(f"[APK_VM] After scroll, visible: {texts_vm[:12]}")
-            # Tap each ABI option that's visible (they are checkboxes — tapping toggles them)
-            ABI_OPTIONS = ["armeabi-v7a", "arm64-v8a", "x86_64", "x86"]
-            for abi in ABI_OPTIONS:
-                for txt, x, y in nodes_vm:
-                    if abi in txt.strip():
-                        adb(f"shell input tap {x} {y}")
-                        print(f"[APK_VM] Tapped ABI: {abi} @ ({x},{y})")
-                        time.sleep(0.5)
-                        break
-                else:
-                    print(f"[APK_VM] ABI option not visible: {abi}")
+            print(f"[APK_VM] After scroll, visible: {texts_vm[:14]}")
+            # Tap only the target ABI radio button
+            tapped_abi = False
+            for txt, x, y in nodes_vm:
+                if txt.strip() == target_abi:
+                    adb(f"shell input tap {x} {y}")
+                    print(f"[APK_VM] Tapped ABI: {target_abi} @ ({x},{y})")
+                    tapped_abi = True
+                    time.sleep(0.5)
+                    break
+            if not tapped_abi:
+                print(f"[APK_VM] Target ABI '{target_abi}' not found on screen — using default")
             time.sleep(1)
-            # Scroll back up to find CONFIRM button
+            # Scroll back up to CONFIRM
             for _ in range(4):
                 scroll_rel(0.5, 0.3, 0.5, 0.8, 600)
                 time.sleep(0.3)

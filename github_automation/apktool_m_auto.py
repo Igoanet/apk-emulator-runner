@@ -113,11 +113,11 @@ def launch_apktool_m():
 ATM_INPUT_PATH = "/sdcard/ApktoolM/atm_input.apk"
 
 def push_input_apk():
+    global ATM_INPUT_PATH
     adb("shell mkdir -p /sdcard/ApktoolM")
     r = adb(f"push '{INPUT_APK}' {ATM_INPUT_PATH}")
     if r.returncode != 0:
         # Fallback to Download
-        global ATM_INPUT_PATH
         ATM_INPUT_PATH = "/sdcard/Download/atm_input.apk"
         adb(f"push '{INPUT_APK}' {ATM_INPUT_PATH}")
     print(f"[ATM] APK pushed to {ATM_INPUT_PATH}")

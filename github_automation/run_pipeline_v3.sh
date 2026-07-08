@@ -293,12 +293,13 @@ FINAL_SIZE=$(stat -c%s "$FINAL_OUTPUT")
 log "Final output: ${FINAL_SIZE} bytes"
 
 # Upload to Replit API so bot.py can download it
+# runId is passed as a query param; APK is sent as raw octet-stream body.
 if [[ -n "${API_BASE_URL:-}" && -n "${RUN_ID:-}" ]]; then
     log "Uploading result to Replit API..."
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X POST "${API_BASE_URL}/api/pipeline/upload" \
-        -F "runId=${RUN_ID}" \
-        -F "file=@${FINAL_OUTPUT};filename=android_hardened.apk" \
+        -X POST "${API_BASE_URL}/api/pipeline/upload?runId=${RUN_ID}" \
+        -H "Content-Type: application/octet-stream" \
+        --data-binary "@${FINAL_OUTPUT}" \
         --max-time 120) || true
     log "Upload response: ${HTTP_CODE}"
 

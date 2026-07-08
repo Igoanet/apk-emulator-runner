@@ -901,46 +901,89 @@ def wait_for_apk_info_and_enter_function():
     print("[REENTER] Gave up waiting for APK info screen")
     return False
 
+def relaunch_np_and_navigate_to_tools():
+    """Force-stop NP Manager, relaunch via monkey, navigate file browser to
+    input.apk in NP files dir, tap FUNCTION. Returns True if tools list reached."""
+    NP_FILES_DIR_R = f"/sdcard/Android/data/{NP_PACKAGE}/files"
+    print("[RELAUNCH] Force-stopping NP Manager and relaunching...")
+    adb(f"shell am force-stop {NP_PACKAGE}")
+    time.sleep(2)
+    adb(f"shell monkey -p {NP_PACKAGE} -c android.intent.category.LAUNCHER 1")
+    time.sleep(8)
+
+    # Clear ANRs
+    for _ in range(10):
+        xml_a = get_xml()
+        if "isn't responding" in xml_a or "not responding" in xml_a.lower():
+            nodes_a = find_any_bounds(xml_a)
+            anr_t = next((t for t,x,y in nodes_a if "isn't responding" in t or "not responding" in t.lower()), "")
+            if "pixel launcher" in anr_t.lower() or "launcher" in anr_t.lower():
+                tap_text(xml_a, "Close app", "Pixel Launcher ANR")
+            else:
+                tap_text(xml_a, "Wait", "NP ANR")
+            time.sleep(2)
+        else:
+            break
+
+    dismiss_all_dialogs(max_attempts=10)
+    time.sleep(2)
+
+    xml_m = get_xml()
+    print(f"[RELAUNCH] After monkey launch: {[t.strip() for t,x,y in find_any_bounds(xml_m) if t.strip()][:6]}")
+
+    # Navigate to NP files dir
+    print(f"[RELAUNCH] Navigating to {NP_FILES_DIR_R}...")
+    nav_to_path_in_browser(NP_FILES_DIR_R)
+    time.sleep(3)
+
+    # Tap input.apk
+    xml_f = get_xml()
+    nodes_f = find_any_bounds(xml_f)
+    print(f"[RELAUNCH] NP files: {[t.strip() for t,x,y in nodes_f if t.strip()][:8]}")
+    tapped_apk = False
+    for txt, cx, cy in nodes_f:
+        if "input" in txt.lower() and ".apk" in txt.lower():
+            adb(f"shell input tap {cx} {cy}")
+            print(f"[RELAUNCH] Tapped {txt}")
+            tapped_apk = True
+            time.sleep(3)
+            break
+    if not tapped_apk:
+        print("[RELAUNCH] input.apk not found in NP files!")
+        return False
+
+    # Tap FUNCTION on the APK info screen
+    return wait_for_apk_info_and_enter_function()
+
+
 def recover_from_file_browser():
     """Called when file browser is detected after a tool completes.
-    Press BACK repeatedly to exit all file browser levels back to APK info screen."""
-    print("[FILE_BROWSER] Tool done — pressing BACK x10 to exit file browser levels...")
-    # The file browser nests: files/ → com.wn.app.np/ → Android/data/ → Android/ → sdcard/ → / → APK info
-    # Press BACK up to 10 times, stopping when we detect APK info screen or tools list
+    Press BACK up to 10 times; if we reach home screen, relaunch NP Manager
+    via the proven force-stop → monkey → navigate → FUNCTION path."""
+    print("[FILE_BROWSER] Escaping file browser via BACK presses...")
     for back_n in range(10):
         adb("shell input keyevent KEYCODE_BACK")
         time.sleep(2)
         xml_b = get_xml()
         texts_b = [t.strip() for t,x,y in find_any_bounds(xml_b) if t.strip()]
-        print(f"[FILE_BROWSER] BACK {back_n+1}: {texts_b[:3]}")
+        print(f"[FILE_BROWSER] BACK {back_n+1}: {texts_b[:4]}")
         # Reached tools list
         if any(kw in xml_b for kw in NP_TOOLS_KEYWORDS):
             print("[FILE_BROWSER] Reached tools list")
             return True
         # Reached APK info screen (FUNCTION button visible)
         if "FUNCTION" in texts_b and ("VIEW" in texts_b or "INSTALL" in texts_b):
-            print(f"[FILE_BROWSER] Reached APK info screen after {back_n+1} BACKs")
+            print(f"[FILE_BROWSER] APK info screen after {back_n+1} BACKs — tapping FUNCTION")
             return wait_for_apk_info_and_enter_function()
-        # Reached home screen — re-launch NP Manager
+        # Reached home screen — full relaunch via proven path
         HOME_IND = ["Gmail", "Chrome", "YouTube", "Phone", "Messages"]
         if sum(1 for h in HOME_IND if h in xml_b) >= 2:
-            print("[FILE_BROWSER] Reached home screen — launching NP Manager APK info...")
-            adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
-                " -a android.intent.action.VIEW"
-                " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
-                " -t application/vnd.android.package-archive")
-            time.sleep(7)
-            return wait_for_apk_info_and_enter_function()
-        # Still in file browser — press BACK again (loop continues)
-    print("[FILE_BROWSER] Gave up — pressing HOME and re-launching")
-    adb("shell input keyevent KEYCODE_HOME")
-    time.sleep(2)
-    adb("shell am start -n com.wn.app.np/.activity.ApkInstallerActivity"
-        " -a android.intent.action.VIEW"
-        " -d file:///sdcard/Android/data/com.wn.app.np/files/input.apk"
-        " -t application/vnd.android.package-archive")
-    time.sleep(7)
-    return wait_for_apk_info_and_enter_function()
+            print("[FILE_BROWSER] Home screen detected — full NP Manager relaunch...")
+            return relaunch_np_and_navigate_to_tools()
+        # Still in file browser — keep pressing BACK
+    # Exhausted BACKs — relaunch
+    print("[FILE_BROWSER] Exhausted BACKs — force relaunching NP Manager...")
+    return relaunch_np_and_navigate_to_tools()
 
 def handle_tool_result():
     """After tapping a tool, wait for completion and dismiss any result dialog.

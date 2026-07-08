@@ -1066,11 +1066,28 @@ def handle_tool_result():
             time.sleep(4)
             continue
 
-        # 7. Final OK/Done/Success dialogs
+        # 7. Final OK/Done/Success dialogs — tap, then wait to see what appears
         for kw in ["OK", "确定", "Done", "DONE", "Success", "完成", "Close", "CLOSE"]:
             if kw in texts:
                 tap_text(xml, kw, f"Tool done: {kw}")
-                time.sleep(3)
+                time.sleep(4)
+                # Check what's on screen after tapping OK
+                xml_after = get_xml()
+                texts_after = [t.strip() for t,x,y in find_any_bounds(xml_after) if t.strip()]
+                # Already on tools list — great
+                if any(kw2 in xml_after for kw2 in NP_TOOLS_KEYWORDS):
+                    print("[TOOL_RESULT] After OK → tools list")
+                    return True
+                # File browser appeared — recover
+                if ("Folder：" in xml_after or "File：" in xml_after) and "/sdcard" in xml_after:
+                    print("[TOOL_RESULT] After OK → file browser — recovering...")
+                    return recover_from_file_browser()
+                # Home screen — recover
+                HOME_I = ["Gmail", "Chrome", "YouTube", "Phone", "Messages"]
+                if sum(1 for h in HOME_I if h in xml_after) >= 2:
+                    print("[TOOL_RESULT] After OK → home screen — recovering...")
+                    return recover_from_file_browser()
+                # Otherwise return True (APK info screen or other — run_tools() will handle)
                 return True
 
         # Still waiting...
@@ -1111,14 +1128,25 @@ def run_tools():
 
     for tool_name in TOOLS_TO_RUN:
         print(f"\n[TOOL] >>> {tool_name}")
-        # Ensure we're on the tools list — press BACK up to 3 times if needed
-        for back_try in range(3):
-            xml_chk = get_xml()
-            if any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
-                break
-            print(f"[TOOL] Not on tools list (try {back_try+1}) — pressing BACK...")
-            adb("shell input keyevent KEYCODE_BACK")
-            time.sleep(3)
+        # Ensure we're on the tools list
+        xml_chk = get_xml()
+        if not any(kw in xml_chk for kw in NP_TOOLS_KEYWORDS):
+            print(f"[TOOL] Not on tools list before {tool_name} — recovering...")
+            # Try BACK first
+            already_recovered = False
+            for back_try in range(3):
+                adb("shell input keyevent KEYCODE_BACK")
+                time.sleep(3)
+                xml_chk2 = get_xml()
+                if any(kw in xml_chk2 for kw in NP_TOOLS_KEYWORDS):
+                    already_recovered = True
+                    break
+            if not already_recovered:
+                # Full relaunch
+                print(f"[TOOL] BACK failed — full relaunch for {tool_name}")
+                if not relaunch_np_and_navigate_to_tools():
+                    print(f"[TOOL] Relaunch failed — skipping {tool_name}")
+                    continue
         # Scroll to top of tools list
         for _ in range(6):
             scroll_rel(0.5, 0.2, 0.5, 0.8, 600)

@@ -2,7 +2,7 @@
 import os, shutil, hashlib
 from pathlib import Path
 
-WORK_DIR = Path("/home/runner/workspace")
+WORK_DIR = Path(os.environ.get("BOT_BASE_DIR", str(Path(__file__).parent.parent.resolve())))
 
 def get_size_mb(path):
     return os.path.getsize(path) / (1024 * 1024)

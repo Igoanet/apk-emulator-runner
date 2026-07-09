@@ -1,23 +1,14 @@
 #!/usr/bin/env bash
 # run_pipeline_v3.sh — Android hardening pipeline (private, no public server)
 #
-# Stages:
-#   1. Download input APK + tool APKs from private GitHub release assets
-#   2. NP Manager  (15 tools)   → np_output.apk
-#   3. MT Manager   (8 tools)   → mt_output.apk
-#   4. APKTool M  (decompile+fix+rebuild) → atm_output.apk
-#   5. Final output saved → artifact uploaded by YAML
-#
-# Env vars (set by emulator-runner-v3.yml):
-#   GITHUB_TOKEN      — auto-provided by GitHub Actions (has repo asset access)
-#   REPO              — e.g. Igoanet/apk-emulator-runner
-#   APK_ASSET_ID      — release asset ID for input APK
-#   NP_ASSET_ID       — release asset ID for NP Manager APK (optional)
-#   MT_ASSET_ID       — release asset ID for MT Manager APK (optional)
-#   APKTOOLM_ASSET_ID — release asset ID for APKTool M APK (optional)
-#   RUN_ID            — pipeline run tag (for artifact naming)
+# Uses `gh api` (GitHub CLI) to download private release assets — this is the
+# ONLY reliable method on GitHub Actions runners for private repo assets.
+# GITHUB_TOKEN is auto-configured for `gh` on every GitHub Actions runner.
 
 set -euo pipefail
+
+# Fallback in case GITHUB_ENV didn't populate REPO
+REPO="${REPO:-Igoanet/apk-emulator-runner}"
 
 WORK_DIR="$HOME/fud-work"
 APK_DIR="$WORK_DIR/apks"
@@ -35,17 +26,20 @@ ok()   { log "✓ $*"; }
 warn() { log "⚠ $*"; }
 fail() { log "✗ $*"; }
 
+# ─── Debug: show key env vars ─────────────────────────────────────────────────
+log "ENV: REPO=${REPO:-UNSET}"
+log "ENV: RUN_ID=${RUN_ID:-UNSET}"
+log "ENV: APK_ASSET_ID=${APK_ASSET_ID:-UNSET}"
+log "ENV: NP_ASSET_ID=${NP_ASSET_ID:-UNSET}"
+log "ENV: MT_ASSET_ID=${MT_ASSET_ID:-UNSET}"
+log "ENV: APKTOOLM_ASSET_ID=${APKTOOLM_ASSET_ID:-UNSET}"
+log "ENV: GITHUB_TOKEN set=$([ -n "${GITHUB_TOKEN:-}" ] && echo yes || echo NO)"
+
 # ─── Cleanup helpers ──────────────────────────────────────────────────────────
 cleanup_emulator_storage() {
     log "[CLEANUP] Wiping emulator sdcard..."
-    adb shell "rm -rf /sdcard/NP_Manager /sdcard/NpManager /sdcard/np_manager" || true
-    adb shell "rm -rf /sdcard/Download/np_*.apk /sdcard/Download/input.apk"    || true
-    adb shell "rm -rf /sdcard/MT_Manager /sdcard/MtManager /sdcard/mt_manager" || true
-    adb shell "rm -rf /sdcard/Download/mt_*.apk"                               || true
-    adb shell "rm -rf /sdcard/ApktoolM /sdcard/apktool_m"                     || true
-    adb shell "rm -rf /sdcard/Download/atm_*.apk"                              || true
-    adb shell "rm -f  /sdcard/Download/output.apk"                             || true
-    adb shell "rm -rf /sdcard/fud_work"                                        || true
+    adb shell "rm -rf /sdcard/NP_Manager /sdcard/Download/input.apk" 2>/dev/null || true
+    adb shell "rm -rf /sdcard/MT_Manager /sdcard/fud_work" 2>/dev/null || true
 }
 
 cleanup_local_work() {
@@ -55,26 +49,31 @@ cleanup_local_work() {
 
 trap 'cleanup_emulator_storage; cleanup_local_work' EXIT
 
-# ─── Download a private GitHub release asset by ID ───────────────────────────
+# ─── Download a private GitHub release asset via gh CLI ───────────────────────
+# gh CLI is pre-installed on all GitHub Actions runners and auto-uses GITHUB_TOKEN.
 download_github_asset() {
     local asset_id="$1" dest="$2" label="$3"
     if [[ -z "$asset_id" ]]; then
         warn "${label}: no asset ID provided — skipping"
         return 1
     fi
-    log "Downloading ${label} (asset_id=${asset_id})..."
-    local API_URL="https://api.github.com/repos/${REPO}/releases/assets/${asset_id}"
+    log "Downloading ${label} (asset_id=${asset_id}, repo=${REPO:-UNSET})..."
+    local API_PATH="/repos/${REPO}/releases/assets/${asset_id}"
+
     for attempt in 1 2 3; do
-        if curl -fsSL \
-                -H "Authorization: token ${GITHUB_TOKEN}" \
-                -H "Accept: application/octet-stream" \
-                --max-time 300 \
-                "$API_URL" -o "$dest" 2>>"$LOG_DIR/curl.log"; then
+        if gh api \
+            --header "Accept: application/octet-stream" \
+            "$API_PATH" \
+            > "$dest" 2>>"$LOG_DIR/curl.log"; then
             local size
             size=$(stat -c%s "$dest" 2>/dev/null || echo 0)
             if [[ $size -gt 1000 ]]; then
                 ok "${label} ready (${size} bytes)"
                 return 0
+            else
+                warn "${label}: downloaded but file too small (${size} bytes) — may be error JSON"
+                cat "$dest" >> "$LOG_DIR/curl.log" 2>/dev/null || true
+                rm -f "$dest"
             fi
         fi
         warn "${label} download failed (attempt ${attempt}/3)"
@@ -276,12 +275,8 @@ FINAL_OUTPUT="$OUTPUT_DIR/android_hardened.apk"
 cp "$CURRENT_INPUT" "$FINAL_OUTPUT"
 FINAL_SIZE=$(stat -c%s "$FINAL_OUTPUT")
 
-ok "Pipeline complete — final output: ${FINAL_SIZE} bytes"
-log "  Path: ${FINAL_OUTPUT}"
-log "  (Artifact upload handled by GitHub Actions YAML)"
+ok "Pipeline complete — ${FINAL_SIZE} bytes → $FINAL_OUTPUT"
+log "(Artifact upload handled by GitHub Actions YAML)"
 
-# Copy logs and screenshots alongside output for the logs artifact
 cp -r "$SCREENSHOT_DIR" "$OUTPUT_DIR/screenshots" 2>/dev/null || true
-
 rm -f "$ATM_OUTPUT" || true
-log "[CLEANUP] Stage outputs removed — final APK ready for artifact upload"

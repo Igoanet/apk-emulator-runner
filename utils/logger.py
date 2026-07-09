@@ -4,7 +4,9 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-LOG_FILE = Path("/home/runner/workspace/logs/pipeline.log")
+_BASE = Path(os.environ.get("BOT_BASE_DIR", str(Path(__file__).parent.parent.resolve())))
+LOG_FILE = _BASE / "logs" / "pipeline.log"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 def setup_logger(name="pipeline"):
     logger = logging.getLogger(name)

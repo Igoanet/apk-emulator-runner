@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Ensure workspace is in path for imports
-_WORKSPACE = Path('/home/runner/workspace')
+_WORKSPACE = Path(os.environ.get("BOT_BASE_DIR", str(Path(__file__).parent.parent.resolve())))
 if str(_WORKSPACE) not in sys.path:
     sys.path.insert(0, str(_WORKSPACE))
 

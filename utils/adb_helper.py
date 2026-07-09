@@ -4,7 +4,8 @@ from pathlib import Path
 from utils.logger import setup_logger
 
 logger = setup_logger()
-TOOLS_PATH = "/home/runner/workspace/android-tools-bin"
+_BASE_DIR  = Path(os.environ.get("BOT_BASE_DIR", str(Path(__file__).parent.parent.resolve())))
+TOOLS_PATH = str(_BASE_DIR / "android-tools-bin")
 ADB = f"{TOOLS_PATH}/adb" if os.path.exists(f"{TOOLS_PATH}/adb") else "adb"
 
 def _run(cmd, timeout=60):

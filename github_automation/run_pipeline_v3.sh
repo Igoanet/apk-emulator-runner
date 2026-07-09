@@ -283,6 +283,72 @@ fi
 rm -f "$MT_OUTPUT" || true
 log "[CLEANUP] MT output removed — ATM output is final input"
 
+# ─── APK Install Verification ────────────────────────────────────────────────
+step "APK Install Verification"
+update_status "install_verify" "testing"
+
+VERIFY_INPUT="$CURRENT_INPUT"
+
+# Find aapt from the Android SDK build-tools
+AAPT_BIN=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" \
+    -name "aapt" -type f 2>/dev/null | sort -V | tail -1)
+ZIPALIGN_BIN=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" \
+    -name "zipalign" -type f 2>/dev/null | sort -V | tail -1)
+
+get_pkg_name() {
+    local apk="$1"
+    if [[ -n "$AAPT_BIN" ]]; then
+        "$AAPT_BIN" dump badging "$apk" 2>/dev/null \
+            | grep "^package:" \
+            | sed "s/.*name='\([^']*\)'.*/\1/"
+    fi
+}
+
+try_install() {
+    local apk="$1"
+    local result
+    result=$(adb install -r "$apk" 2>&1)
+    echo "$result"
+    echo "$result" | grep -qi "success"
+}
+
+if try_install "$VERIFY_INPUT" > "$LOG_DIR/install_test.log" 2>&1; then
+    ok "APK installs on emulator"
+    update_status "install_verify" "passed"
+    PKG=$(get_pkg_name "$VERIFY_INPUT")
+    [[ -n "$PKG" ]] && { adb uninstall "$PKG" 2>/dev/null || true; }
+else
+    INSTALL_ERR=$(cat "$LOG_DIR/install_test.log")
+    warn "Install FAILED: ${INSTALL_ERR:0:200}"
+    update_status "install_verify" "failed — attempting zipalign fix"
+
+    if [[ -n "$ZIPALIGN_BIN" ]]; then
+        ALIGNED="$OUTPUT_DIR/aligned_for_verify.apk"
+        "$ZIPALIGN_BIN" -v -p 4 "$VERIFY_INPUT" "$ALIGNED" 2>/dev/null || true
+
+        if [[ -f "$ALIGNED" && $(stat -c%s "$ALIGNED" 2>/dev/null || echo 0) -gt 1000 ]]; then
+            if try_install "$ALIGNED" >> "$LOG_DIR/install_test.log" 2>&1; then
+                cp "$ALIGNED" "$VERIFY_INPUT"
+                CURRENT_INPUT="$VERIFY_INPUT"
+                ok "APK installs after zipalign fix"
+                update_status "install_verify" "fixed_by_zipalign"
+                PKG=$(get_pkg_name "$VERIFY_INPUT")
+                [[ -n "$PKG" ]] && { adb uninstall "$PKG" 2>/dev/null || true; }
+            else
+                warn "Still fails after zipalign — delivering as-is"
+                update_status "install_verify" "failed_delivering_anyway"
+            fi
+            rm -f "$ALIGNED" || true
+        else
+            warn "zipalign produced no output"
+            update_status "install_verify" "zipalign_failed_delivering_anyway"
+        fi
+    else
+        warn "zipalign not found — delivering as-is"
+        update_status "install_verify" "no_zipalign_delivering_anyway"
+    fi
+fi
+
 # ─── Final output ─────────────────────────────────────────────────────────────
 step "Packaging final output"
 

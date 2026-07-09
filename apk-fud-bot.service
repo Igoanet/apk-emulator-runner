@@ -1,0 +1,34 @@
+[Unit]
+Description=APK FUD Bot v8 — GPP Bypass Pipeline
+Documentation=file:///opt/apk-fud-bot/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/apk-fud-bot
+
+# Load env vars from .env file (created by vps_deploy.sh)
+EnvironmentFile=/opt/apk-fud-bot/.env
+
+# Prepend android-tools-bin so apktool, aapt, zipalign, apksigner are found
+Environment="PATH=/opt/apk-fud-bot/android-tools-bin:/usr/local/bin:/usr/bin:/bin"
+
+ExecStart=/usr/bin/python3 /opt/apk-fud-bot/bot.py
+
+# Always restart — catches crashes, OOM kills, and accidental SIGTERM
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+
+# Give it 30 s to shut down gracefully before SIGKILL
+TimeoutStopSec=30
+
+# Stream logs to journald (view with: journalctl -u apk-fud-bot -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apk-fud-bot
+
+[Install]
+WantedBy=multi-user.target

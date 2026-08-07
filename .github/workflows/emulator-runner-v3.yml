@@ -107,11 +107,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
         with:
-          # API 31 + play_store: Play Protect certified image (API 33 pe play_store
-          # package exist nahi karta). google_apis pe Google sign-in silently fail hota tha.
-          api-level: 31
+          # google_apis_playstore: Play Store + certified GMS (purane 'play_store'
+          # naam ka package API 31/33 pe exist nahi karta). google_apis (non-store)
+          # pe Google sign-in silently fail hota tha.
+          api-level: 33
           arch: x86_64
-          target: play_store
+          target: google_apis_playstore
           profile: pixel_6
           ram-size: 4096M
           heap-size: 512M

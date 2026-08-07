@@ -114,6 +114,13 @@ else
     log "GMAIL_EMAIL not set — Gmail sign-in stage skipped"
 fi
 
+# ─── Gmail-login-only test mode ───────────────────────────────────────────────
+# APK_ASSET_ID empty ya 0 → sirf Gmail login test karna hai; downloads + NP skip.
+if [[ -z "${APK_ASSET_ID:-}" || "${APK_ASSET_ID}" == "0" ]]; then
+    ok "No input APK asset — Gmail-login-only test run complete (screenshots/logs artifacts me)"
+    exit 0
+fi
+
 # ─── Download input APK ───────────────────────────────────────────────────────
 step "Downloading input APK"
 INPUT_APK="$APK_DIR/input.apk"

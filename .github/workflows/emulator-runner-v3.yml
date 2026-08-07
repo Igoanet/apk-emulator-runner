@@ -109,7 +109,9 @@ jobs:
         with:
           api-level: 33
           arch: x86_64
-          target: google_apis
+          # play_store image Play Protect certified hoti hai — google_apis pe
+          # Google sign-in silently fail hota hai (uncertified device)
+          target: play_store
           profile: pixel_6
           ram-size: 4096M
           heap-size: 512M

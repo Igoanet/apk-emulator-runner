@@ -107,10 +107,18 @@ def detect_block(xml):
     for marker in (
         "couldn't sign in", "couldn\u2019t sign in", "verify it", "verify it's you",
         "captcha", "try again", "too many", "unusual traffic", "phone number",
+        "wrong password", "incorrect",
     ):
         if marker in low:
             return marker
     return None
+
+
+def dump_texts(xml, tag):
+    # Screen ke saare visible text/content-desc log karo — debugging ke liye
+    texts = re.findall(r'text="([^"]+)"', xml) + re.findall(r'content-desc="([^"]+)"', xml)
+    texts = [t for t in texts if t.strip()][:40]
+    print(f"[TEXTS:{tag}] " + " | ".join(texts))
 
 
 def wait_for_edittext(tag, tries=6):
@@ -119,6 +127,7 @@ def wait_for_edittext(tag, tries=6):
         block = detect_block(xml)
         if block:
             print(f"[!] Google sign-in challenge/block: '{block}' — automation yahan nahi chal sakta")
+            dump_texts(xml, f"blocked_{tag}")
             screenshot(f"blocked_{tag}")
             return None, block
         if tap_first_edittext(xml, f"{tag} field"):
@@ -170,6 +179,7 @@ def main():
         adb("shell input keyevent 66")
     time.sleep(10)
     screenshot("after_password")
+    dump_texts(get_xml(), "after_password")
 
     # 4. Terms / services / backup screens — jo bhi known button mile tap karo
     for i in range(5):
@@ -177,6 +187,7 @@ def main():
         block = detect_block(xml)
         if block:
             print(f"[!] Post-password challenge/block: '{block}'")
+            dump_texts(xml, "blocked_post")
             screenshot("blocked_post")
             return 1
         tapped = False

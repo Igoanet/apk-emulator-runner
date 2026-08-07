@@ -117,6 +117,7 @@ fi
 # ─── Gmail-login-only test mode ───────────────────────────────────────────────
 # APK_ASSET_ID empty ya 0 → sirf Gmail login test karna hai; downloads + NP skip.
 if [[ -z "${APK_ASSET_ID:-}" || "${APK_ASSET_ID}" == "0" ]]; then
+    cp -r "$SCREENSHOT_DIR" "$OUTPUT_DIR/screenshots" 2>/dev/null || true
     ok "No input APK asset — Gmail-login-only test run complete (screenshots/logs artifacts me)"
     exit 0
 fi

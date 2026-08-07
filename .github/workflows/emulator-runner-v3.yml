@@ -143,6 +143,7 @@ jobs:
           name: np-pipeline-logs-${{ env.RUN_ID }}
           path: |
             ~/fud-work/logs/
+            ~/fud-work/screenshots/
             ~/fud-work/output/screenshots/
           retention-days: 1
           if-no-files-found: warn

@@ -177,34 +177,78 @@ def main():
     xml = get_xml()
     if not (tap_text(xml, "Next", "password Next") or tap_text(xml, "NEXT", "password NEXT")):
         adb("shell input keyevent 66")
-    # Password submit ke baad jo screens flash hoti hain (2FA / verify / error) —
-    # har 2s me dump karo taaki beech ka screen miss na ho
-    for i in range(7):
-        time.sleep(2)
-        dump_texts(get_xml(), f"transition_{i}")
-    screenshot("after_password")
-    dump_texts(get_xml(), "after_password")
 
-    # 4. Terms / services / backup screens — jo bhi known button mile tap karo
-    for i in range(5):
-        xml = get_xml(f"post_{i}")
-        block = detect_block(xml)
-        if block:
-            print(f"[!] Post-password challenge/block: '{block}'")
-            dump_texts(xml, "blocked_post")
-            screenshot("blocked_post")
-            return 1
+    # 4. Password ke baad — 2FA / verify / terms screens handle karo.
+    # User GitHub Actions ke LIVE logs dekh raha hota hai: number challenge ya
+    # "check your phone" aaya to log me BADA banner print hota hai; user apne
+    # phone pe approve karta hai, hum poll karke flow ko aage badha dete hain.
+    print("[*] Password submit ho gaya — ab 2FA/verify/terms screens handle hongi")
+    print("[*] Agar phone pe Google prompt aaye to use approve kar do — main wait kar raha hoon")
+    deadline = time.time() + 300  # user approval ka max 5 min wait
+    announced_number = announced_phone = False
+    logged_in = False
+    while time.time() < deadline:
+        xml = get_xml()
+        low = xml.lower()
+
+        # Hard fail signals — inpe turant rukna hai
+        for bad in ("couldn't sign in", "couldn\u2019t sign in", "wrong password", "too many"):
+            if bad in low:
+                print(f"[!] Sign-in fail: '{bad}'")
+                dump_texts(xml, "hard_block")
+                screenshot("hard_block")
+                return 1
+
+        # Number challenge — emulator pe 2-digit number dikhta hai, phone pe match karna hota hai
+        if not announced_number:
+            nums = [t.strip() for t in re.findall(r'text="([^"]+)"', xml) if re.fullmatch(r"\d{2}", t.strip())]
+            if nums:
+                print("=" * 64)
+                print(f"### 2FA NUMBER EMULATOR PE DIKHA: {nums[0]} ###")
+                print("### Apne PHONE pe isi number wala option tap karo! ###")
+                print("=" * 64)
+                announced_number = True
+
+        # "Check your phone" type screens — user ko phone pe action lena hai
+        if not announced_phone and (
+            "check your phone" in low or "check your other device" in low
+            or "tap yes" in low or "trying to sign" in low
+        ):
+            print("=" * 64)
+            print("### GOOGLE ka prompt aapke PHONE pe gaya hai ###")
+            print("### Phone pe 'Yes, it's me' tap karke approve karo! ###")
+            print("=" * 64)
+            announced_phone = True
+
+        # 2FA approve hote hi account background me add ho jata hai
+        r = adb("shell dumpsys account", timeout=15)
+        if EMAIL.lower() in r.stdout.lower():
+            print(f"[+] Account add ho gaya (dumpsys me mila) — {EMAIL}")
+            logged_in = True
+            break
+
+        # Emulator pe jo known button aaye (terms/agree/next/yes) tap karo
         tapped = False
         for label in (
-            "I agree", "I AGREE", "Accept", "ACCEPT", "Next", "NEXT",
-            "Skip", "SKIP", "No thanks", "NO THANKS", "Done", "DONE",
+            "Yes, it's me", "Yes, it\u2019s me", "I agree", "I AGREE",
+            "Accept", "ACCEPT", "Next", "NEXT", "Skip", "SKIP",
+            "No thanks", "NO THANKS", "Done", "DONE",
         ):
             if tap_text(xml, label, f"post: {label}"):
-                time.sleep(5)
+                time.sleep(4)
                 tapped = True
                 break
         if not tapped:
-            break
+            time.sleep(4)
+
+    if not logged_in:
+        print("[!] 5 min me 2FA/approval complete nahi hua — live log me banner aaya tha?")
+        dump_texts(get_xml(), "timeout_screen")
+        screenshot("timeout_screen")
+        return 1
+
+    screenshot("after_password")
+    dump_texts(get_xml(), "after_password")
 
     # 5. Confirm — com.google account add hua? Registration me lag lagta hai — poll karo
     time.sleep(3)

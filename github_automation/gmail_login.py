@@ -202,11 +202,29 @@ def main():
         if not tapped:
             break
 
-    # 5. Confirm — com.google account add hua?
+    # 5. Confirm — com.google account add hua? Registration me lag lagta hai — poll karo
     time.sleep(3)
-    r = adb("shell dumpsys account", timeout=15)
+    confirmed = False
+    for i in range(6):
+        r = adb("shell dumpsys account", timeout=15)
+        if EMAIL.lower() in r.stdout.lower():
+            confirmed = True
+            break
+        print(f"[*] dumpsys account me abhi nahi mila (try {i+1}/6) — 10s wait")
+        time.sleep(10)
+
+    if not confirmed:
+        # Fallback: Settings → Accounts screen pe UI me dekho
+        adb("shell am start -a android.settings.SYNC_SETTINGS")
+        time.sleep(5)
+        xml = get_xml("accounts_screen")
+        dump_texts(xml, "accounts_screen")
+        screenshot("accounts_screen")
+        if EMAIL.lower() in xml.lower():
+            confirmed = True
+
     screenshot("final")
-    if EMAIL.lower() in r.stdout.lower():
+    if confirmed:
         print(f"[+] Gmail login confirmed — {EMAIL} emulator pe add ho gaya")
         return 0
     print("[!] Account list me email nahi mila — login shayad poora nahi hua, screenshots dekh lo")

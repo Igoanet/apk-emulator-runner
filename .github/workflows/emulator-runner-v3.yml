@@ -107,10 +107,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           GH_TOKEN: ${{ github.token }}
         with:
-          api-level: 33
+          # API 31 + play_store: Play Protect certified image (API 33 pe play_store
+          # package exist nahi karta). google_apis pe Google sign-in silently fail hota tha.
+          api-level: 31
           arch: x86_64
-          # play_store image Play Protect certified hoti hai — google_apis pe
-          # Google sign-in silently fail hota hai (uncertified device)
           target: play_store
           profile: pixel_6
           ram-size: 4096M

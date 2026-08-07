@@ -1,8 +1,9 @@
 name: APK NP Manager Pipeline
-# Android emulator pe sirf NP Manager automation chalata hai.
+# Android emulator pe Gmail (Google account) sign-in + NP Manager automation.
 # Trigger: manual workflow_dispatch ya repository_dispatch (type: run-fud-pipeline).
 # APKs private release assets se `gh api` se download hote hain (GITHUB_TOKEN).
 # Output APK GitHub Actions artifact ke roop me upload hota hai.
+# NOTE: Gmail sign-in ke liye google_apis image zaroori hai (AOSP me Google account nahi chalta).
 
 on:
   repository_dispatch:
@@ -17,6 +18,14 @@ on:
         required: true
       np_asset_id:
         description: "Release asset ID for NP Manager APK (optional)"
+        required: false
+        default: ""
+      gmail_email:
+        description: "Emulator pe sign-in karne wala Gmail (optional)"
+        required: false
+        default: ""
+      gmail_pass:
+        description: "Gmail password (optional, masked)"
         required: false
         default: ""
 
@@ -53,17 +62,25 @@ jobs:
           echo "REPO=${{ github.repository }}" >> "$GITHUB_ENV"
           if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
             NP_PASS="${{ github.event.client_payload.np_manager_pass }}"
+            G_PASS="${{ github.event.client_payload.gmail_pass }}"
             echo "::add-mask::${NP_PASS}"
+            echo "::add-mask::${G_PASS}"
 
             echo "RUN_ID=${{ github.event.client_payload.run_id }}"                      >> "$GITHUB_ENV"
             echo "APK_ASSET_ID=${{ github.event.client_payload.apk_asset_id }}"         >> "$GITHUB_ENV"
             echo "NP_ASSET_ID=${{ github.event.client_payload.np_asset_id }}"           >> "$GITHUB_ENV"
             echo "NP_MANAGER_EMAIL=${{ github.event.client_payload.np_manager_email }}" >> "$GITHUB_ENV"
             echo "NP_MANAGER_PASS=${NP_PASS}"                                           >> "$GITHUB_ENV"
+            echo "GMAIL_EMAIL=${{ github.event.client_payload.gmail_email }}"           >> "$GITHUB_ENV"
+            echo "GMAIL_PASS=${G_PASS}"                                                 >> "$GITHUB_ENV"
           else
+            G_PASS="${{ github.event.inputs.gmail_pass }}"
+            echo "::add-mask::${G_PASS}"
             echo "RUN_ID=${{ github.event.inputs.run_id }}"                              >> "$GITHUB_ENV"
             echo "APK_ASSET_ID=${{ github.event.inputs.apk_asset_id }}"                 >> "$GITHUB_ENV"
             echo "NP_ASSET_ID=${{ github.event.inputs.np_asset_id }}"                   >> "$GITHUB_ENV"
+            echo "GMAIL_EMAIL=${{ github.event.inputs.gmail_email }}"                   >> "$GITHUB_ENV"
+            echo "GMAIL_PASS=${G_PASS}"                                                 >> "$GITHUB_ENV"
           fi
 
       # ── Enable KVM for hardware acceleration ──────────────────────────────
@@ -74,15 +91,16 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # ── Copy NP Manager automation script to home dir ─────────────────────
+      # ── Copy automation scripts to home dir ───────────────────────────────
       - name: Set up automation scripts
         run: |
           mkdir -p ~/github_automation
           cp github_automation/np_manager_v3.py ~/github_automation/
+          cp github_automation/gmail_login.py    ~/github_automation/
           chmod +x github_automation/run_pipeline_v3.sh
 
-      # ── Start Android emulator and run NP Manager pipeline ────────────────
-      - name: Run NP Manager on Android emulator
+      # ── Start Android emulator and run pipeline ───────────────────────────
+      - name: Run Gmail + NP Manager on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
           # gh CLI uses GITHUB_TOKEN automatically on Actions runners
@@ -91,6 +109,7 @@ jobs:
         with:
           api-level: 33
           arch: x86_64
+          target: google_apis
           profile: pixel_6
           ram-size: 4096M
           heap-size: 512M

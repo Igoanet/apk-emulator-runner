@@ -5,8 +5,13 @@ GitHub Actions workflow jo Android emulator (API 33, Pixel 6) boot karke input A
 ## Files
 
 - `.github/workflows/emulator-runner-v3.yml` — emulator workflow (manual `workflow_dispatch` ya `repository_dispatch` type `run-fud-pipeline`)
-- `github_automation/run_pipeline_v3.sh` — pipeline driver: release assets download → NP Manager → install verify → output APK
+- `github_automation/run_pipeline_v3.sh` — pipeline driver: Gmail sign-in → release assets download → NP Manager → install verify → output APK
+- `github_automation/gmail_login.py` — emulator pe Google (Gmail) account sign-in (ADB UI automation)
 - `github_automation/np_manager_v3.py` — NP Manager automation (install → login → tools → signed output APK)
+
+## Gmail sign-in
+
+`gmail_email` + `gmail_pass` inputs (ya dispatch payload me same keys) do to pipeline emulator pe pehle Gmail login karti hai. Emulator `google_apis` image use karta hai — AOSP me Google sign-in nahi chalta. Google kabhi kabhi automated sign-in challenge karta hai ("Couldn't sign in" / CAPTCHA) — fail hone pe pipeline nahi rukti, screenshots (`gmail_*.png`) logs artifact me milte hain. **Secondary Gmail use karo, 2FA off hona chahiye.**
 
 ## Trigger
 

@@ -36,6 +36,7 @@ log "ENV: RUN_ID=${RUN_ID:-UNSET}"
 log "ENV: APK_ASSET_ID=${APK_ASSET_ID:-UNSET}"
 log "ENV: NP_ASSET_ID=${NP_ASSET_ID:-UNSET}"
 log "ENV: GITHUB_TOKEN set=$([ -n "${GITHUB_TOKEN:-}" ] && echo yes || echo NO)"
+log "ENV: GMAIL_EMAIL set=$([ -n "${GMAIL_EMAIL:-}" ] && echo yes || echo NO)"
 
 # ─── Cleanup helpers ──────────────────────────────────────────────────────────
 cleanup_emulator_storage() {
@@ -96,6 +97,22 @@ adb shell input keyevent KEYCODE_WAKEUP || true
 adb shell wm dismiss-keyguard           || true
 adb shell input keyevent KEYCODE_HOME   || true
 sleep 2
+
+# ─── Gmail (Google account) sign-in ───────────────────────────────────────────
+# GMAIL_EMAIL set ho tabhi chalta hai. UI automation brittle hoti hai — fail pe
+# pipeline rukti nahi, sirf warn; screenshots/logs artifacts me milte hain.
+if [[ -n "${GMAIL_EMAIL:-}" ]]; then
+    step "Gmail sign-in (${GMAIL_EMAIL})"
+    export GMAIL_EMAIL GMAIL_PASS
+    export SCREENSHOT_DIR="$SCREENSHOT_DIR"
+    if python3 ~/github_automation/gmail_login.py 2>&1 | tee "$LOG_DIR/gmail_login.log"; then
+        ok "Gmail sign-in confirmed — ${GMAIL_EMAIL} emulator pe logged in"
+    else
+        warn "Gmail sign-in poora nahi hua — gmail_*.png screenshots + gmail_login.log dekh lo (pipeline continue hogi)"
+    fi
+else
+    log "GMAIL_EMAIL not set — Gmail sign-in stage skipped"
+fi
 
 # ─── Download input APK ───────────────────────────────────────────────────────
 step "Downloading input APK"

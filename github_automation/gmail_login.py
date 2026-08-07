@@ -177,7 +177,11 @@ def main():
     xml = get_xml()
     if not (tap_text(xml, "Next", "password Next") or tap_text(xml, "NEXT", "password NEXT")):
         adb("shell input keyevent 66")
-    time.sleep(10)
+    # Password submit ke baad jo screens flash hoti hain (2FA / verify / error) —
+    # har 2s me dump karo taaki beech ka screen miss na ho
+    for i in range(7):
+        time.sleep(2)
+        dump_texts(get_xml(), f"transition_{i}")
     screenshot("after_password")
     dump_texts(get_xml(), "after_password")
 

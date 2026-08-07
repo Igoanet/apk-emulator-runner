@@ -184,7 +184,7 @@ def main():
     # phone pe approve karta hai, hum poll karke flow ko aage badha dete hain.
     print("[*] Password submit ho gaya — ab 2FA/verify/terms screens handle hongi")
     print("[*] Agar phone pe Google prompt aaye to use approve kar do — main wait kar raha hoon")
-    deadline = time.time() + 300  # user approval ka max 5 min wait
+    deadline = time.time() + 600  # user approval ka max 10 min wait
     announced_number = announced_phone = False
     logged_in = False
     while time.time() < deadline:

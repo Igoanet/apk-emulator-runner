@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# run_pipeline_v3.sh — Android hardening pipeline (private, no public server)
+# run_pipeline_v3.sh — Android emulator + NP Manager pipeline (NP-only)
 #
-# Uses `gh api` (GitHub CLI) to download private release assets — this is the
-# ONLY reliable method on GitHub Actions runners for private repo assets.
-# GITHUB_TOKEN is auto-configured for `gh` on every GitHub Actions runner.
+# Input APK aur NP Manager APK private GitHub release assets se `gh api` se
+# download hote hain — GitHub Actions runners pe yehi reliable method hai.
+# REPO kabhi hardcode nahi — workflow ke "Resolve inputs" step se env me aata
+# hai (github.repository), fallback `gh repo view` se current repo.
 
 set -euo pipefail
 
-# Fallback in case GITHUB_ENV didn't populate REPO
-REPO="${REPO:-Igoanet/apk-emulator-runner}"
+REPO="${REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)}"
+if [[ -z "$REPO" ]]; then
+    echo "REPO env missing — workflow isko github.repository se set karta hai" >&2
+    exit 1
+fi
 
 WORK_DIR="$HOME/fud-work"
 APK_DIR="$WORK_DIR/apks"
@@ -31,15 +35,12 @@ log "ENV: REPO=${REPO:-UNSET}"
 log "ENV: RUN_ID=${RUN_ID:-UNSET}"
 log "ENV: APK_ASSET_ID=${APK_ASSET_ID:-UNSET}"
 log "ENV: NP_ASSET_ID=${NP_ASSET_ID:-UNSET}"
-log "ENV: MT_ASSET_ID=${MT_ASSET_ID:-UNSET}"
-log "ENV: APKTOOLM_ASSET_ID=${APKTOOLM_ASSET_ID:-UNSET}"
 log "ENV: GITHUB_TOKEN set=$([ -n "${GITHUB_TOKEN:-}" ] && echo yes || echo NO)"
 
 # ─── Cleanup helpers ──────────────────────────────────────────────────────────
 cleanup_emulator_storage() {
     log "[CLEANUP] Wiping emulator sdcard..."
     adb shell "rm -rf /sdcard/NP_Manager /sdcard/Download/input.apk" 2>/dev/null || true
-    adb shell "rm -rf /sdcard/MT_Manager /sdcard/fud_work" 2>/dev/null || true
 }
 
 cleanup_local_work() {
@@ -57,7 +58,7 @@ download_github_asset() {
         warn "${label}: no asset ID provided — skipping"
         return 1
     fi
-    log "Downloading ${label} (asset_id=${asset_id}, repo=${REPO:-UNSET})..."
+    log "Downloading ${label} (asset_id=${asset_id}, repo=${REPO})..."
     local API_PATH="/repos/${REPO}/releases/assets/${asset_id}"
 
     for attempt in 1 2 3; do
@@ -106,25 +107,13 @@ if ! download_github_asset "${APK_ASSET_ID:-}" "$INPUT_APK" "input APK"; then
 fi
 log "Input APK: $(stat -c%s "$INPUT_APK") bytes"
 
-# ─── Download tool APKs ───────────────────────────────────────────────────────
-step "Downloading tool APKs"
+# ─── Download NP Manager APK ──────────────────────────────────────────────────
+step "Downloading NP Manager APK"
 
 NP_APK="$TOOL_DIR/np_manager.apk"
 if ! download_github_asset "${NP_ASSET_ID:-}" "$NP_APK" "NP Manager APK"; then
-    warn "NP Manager APK unavailable — Phase 1 (NP) will be skipped"
+    warn "NP Manager APK unavailable — NP stage will pass-through input APK"
     NP_APK=""
-fi
-
-MT_APK="$TOOL_DIR/mt_manager.apk"
-if ! download_github_asset "${MT_ASSET_ID:-}" "$MT_APK" "MT Manager APK"; then
-    warn "MT Manager APK unavailable — Phase 2 (MT) will be skipped"
-    MT_APK=""
-fi
-
-ATOOLM_APK="$TOOL_DIR/apktool_m.apk"
-if ! download_github_asset "${APKTOOLM_ASSET_ID:-}" "$ATOOLM_APK" "APKTool M APK"; then
-    warn "APKTool M APK unavailable — Phase 3 (ATM) will be skipped"
-    ATOOLM_APK=""
 fi
 
 # ─── Install APK on emulator and verify it runs ───────────────────────────────
@@ -138,8 +127,8 @@ get_pkg_name() {
     aapt dump badging "$1" 2>/dev/null | grep "^package:" | sed "s/.*name='\([^']*\)'.*/\1/" || echo ""
 }
 
-# ─── Phase 1: NP Manager ─────────────────────────────────────────────────────
-step "Phase 1 — NP Manager (15 tools)"
+# ─── NP Manager stage ─────────────────────────────────────────────────────────
+step "NP Manager (15 tools)"
 
 NP_OUTPUT="$OUTPUT_DIR/np_output.apk"
 CURRENT_INPUT="$INPUT_APK"
@@ -176,74 +165,6 @@ fi
 
 rm -f "$INPUT_APK" || true
 
-# ─── Phase 2: MT Manager ─────────────────────────────────────────────────────
-step "Phase 2 — MT Manager (8 tools)"
-
-MT_OUTPUT="$OUTPUT_DIR/mt_output.apk"
-
-if [[ -n "$MT_APK" && -f "$MT_APK" ]]; then
-    export INPUT_APK="$CURRENT_INPUT"
-    export MT_APK="$MT_APK"
-
-    if python3 ~/github_automation/mt_manager_auto.py 2>&1 | tee "$LOG_DIR/mt_manager.log"; then
-        MT_OUT=$(find "$OUTPUT_DIR" -name "*.apk" -newer "$CURRENT_INPUT" 2>/dev/null | head -1)
-        [[ -f "$OUTPUT_DIR/mt_output.apk" ]] && MT_OUT="$OUTPUT_DIR/mt_output.apk"
-
-        if [[ -n "$MT_OUT" && -f "$MT_OUT" ]]; then
-            cp "$MT_OUT" "$MT_OUTPUT"
-            CURRENT_INPUT="$MT_OUTPUT"
-            ok "MT Manager done → $(stat -c%s "$MT_OUTPUT") bytes"
-        else
-            warn "MT Manager produced no output — using previous APK"
-            cp "$CURRENT_INPUT" "$MT_OUTPUT"
-        fi
-    else
-        warn "MT Manager script failed — using previous APK"
-        cp "$CURRENT_INPUT" "$MT_OUTPUT"
-        CURRENT_INPUT="$MT_OUTPUT"
-    fi
-else
-    warn "Skipping MT Manager (not available)"
-    cp "$CURRENT_INPUT" "$MT_OUTPUT"
-    CURRENT_INPUT="$MT_OUTPUT"
-fi
-
-rm -f "$NP_OUTPUT" || true
-
-# ─── Phase 3: APKTool M ──────────────────────────────────────────────────────
-step "Phase 3 — APKTool M (decompile + resource fix + rebuild)"
-
-ATM_OUTPUT="$OUTPUT_DIR/atm_output.apk"
-
-if [[ -n "$ATOOLM_APK" && -f "$ATOOLM_APK" ]]; then
-    export INPUT_APK="$CURRENT_INPUT"
-    export APKTOOL_M_APK="$ATOOLM_APK"
-
-    if python3 ~/github_automation/apktool_m_auto.py 2>&1 | tee "$LOG_DIR/apktool_m.log"; then
-        ATM_OUT=$(find "$OUTPUT_DIR" -name "*.apk" -newer "$CURRENT_INPUT" 2>/dev/null | head -1)
-        [[ -f "$OUTPUT_DIR/atm_output.apk" ]] && ATM_OUT="$OUTPUT_DIR/atm_output.apk"
-
-        if [[ -n "$ATM_OUT" && -f "$ATM_OUT" ]]; then
-            cp "$ATM_OUT" "$ATM_OUTPUT"
-            CURRENT_INPUT="$ATM_OUTPUT"
-            ok "APKTool M done → $(stat -c%s "$ATM_OUTPUT") bytes"
-        else
-            warn "APKTool M produced no output — using previous APK"
-            cp "$CURRENT_INPUT" "$ATM_OUTPUT"
-        fi
-    else
-        warn "APKTool M failed — using previous APK"
-        cp "$CURRENT_INPUT" "$ATM_OUTPUT"
-        CURRENT_INPUT="$ATM_OUTPUT"
-    fi
-else
-    warn "Skipping APKTool M (not available)"
-    cp "$CURRENT_INPUT" "$ATM_OUTPUT"
-    CURRENT_INPUT="$ATM_OUTPUT"
-fi
-
-rm -f "$MT_OUTPUT" || true
-
 # ─── APK install verification ─────────────────────────────────────────────────
 step "Verifying APK installs on emulator"
 
@@ -279,4 +200,4 @@ ok "Pipeline complete — ${FINAL_SIZE} bytes → $FINAL_OUTPUT"
 log "(Artifact upload handled by GitHub Actions YAML)"
 
 cp -r "$SCREENSHOT_DIR" "$OUTPUT_DIR/screenshots" 2>/dev/null || true
-rm -f "$ATM_OUTPUT" || true
+rm -f "$NP_OUTPUT" || true

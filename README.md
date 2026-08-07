@@ -1,47 +1,23 @@
 # APK Emulator Runner
 
-  Public emulator automation for APK FUD Pipeline. Gets **4 vCPU / 16 GB RAM** for free because this repo is public.
+GitHub Actions workflow jo Android emulator (API 33, Pixel 6) boot karke input APK pe **NP Manager** automation chalata hai. Bas yahi do cheezein hain — emulator + NP Manager.
 
-  ## Architecture
+## Files
 
-  ```
-  Private: apk-fud-pipeline (your code, secret)
-           |
-           v  Trigger via GitHub API
-           |
-  Public:  apk-emulator-runner (emulator, 4 cores)
-           |
-           v  Run NP Manager on Android emulator
-           |
-           v  Upload output APK as artifact
-  ```
+- `.github/workflows/emulator-runner-v3.yml` — emulator workflow (manual `workflow_dispatch` ya `repository_dispatch` type `run-fud-pipeline`)
+- `github_automation/run_pipeline_v3.sh` — pipeline driver: release assets download → NP Manager → install verify → output APK
+- `github_automation/np_manager_v3.py` — NP Manager automation (install → login → tools → signed output APK)
 
-  ## Trigger
+## Trigger
 
-  This workflow is triggered by the private `apk-fud-pipeline` repo via GitHub Actions API.
+**Manual:** Actions tab se `run_id` + `apk_asset_id` do (optional `np_asset_id`).
 
-  ## Runner Specs
+**Dispatch:**
+```
+POST /repos/{owner}/{repo}/dispatches
+{ "event_type": "run-fud-pipeline",
+  "client_payload": { "run_id", "apk_asset_id", "np_asset_id",
+                      "np_manager_email", "np_manager_pass" } }
+```
 
-  | Spec | Value |
-  |------|-------|
-  | Runner | ubuntu-latest |
-  | Cores | 4 |
-  | RAM | 8192 MB |
-  | API Level | 34 |
-  | Arch | x86_64 |
-  | GPU | swiftshader_indirect |
-
-  ## Secrets Required
-
-  - `TELEGRAM_TOKEN` - For job notifications
-
-  ## Inputs
-
-  | Input | Description |
-  |-------|-------------|
-  | job_id | Job ID |
-  | apk_url | URL to input APK |
-  | telegram_chat_id | Telegram chat for notifications |
-  | np_manager_email | NP Manager login |
-  | np_manager_pass | NP Manager password |
-  
+Output APK aur logs GitHub Actions artifacts me milte hain (1-day retention).

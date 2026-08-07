@@ -1,7 +1,8 @@
-name: APK FUD Pipeline v3
-# Triggered via repository_dispatch from the bot (no public server needed).
-# Downloads APKs from private GitHub release assets using GITHUB_TOKEN.
-# Uploads output as a GitHub Actions artifact — bot polls and downloads directly.
+name: APK NP Manager Pipeline
+# Android emulator pe sirf NP Manager automation chalata hai.
+# Trigger: manual workflow_dispatch ya repository_dispatch (type: run-fud-pipeline).
+# APKs private release assets se `gh api` se download hote hain (GITHUB_TOKEN).
+# Output APK GitHub Actions artifact ke roop me upload hota hai.
 
 on:
   repository_dispatch:
@@ -18,19 +19,16 @@ on:
         description: "Release asset ID for NP Manager APK (optional)"
         required: false
         default: ""
-      mt_asset_id:
-        description: "Release asset ID for MT Manager APK (optional)"
-        required: false
-        default: ""
-      apktoolm_asset_id:
-        description: "Release asset ID for APKTool M APK (optional)"
-        required: false
-        default: ""
 
 jobs:
-  fud-pipeline:
+  np-pipeline:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    # GITHUB_TOKEN ko repo content (release assets) padhne ki permission
+    permissions:
+      contents: write
+      actions: write
 
     steps:
       # ── Checkout repo to get automation scripts ──────────────────────────
@@ -51,25 +49,21 @@ jobs:
       - name: Resolve inputs
         id: inputs
         run: |
+          # Repo kabhi hardcode nahi — hamesha current repo se resolve hota hai
+          echo "REPO=${{ github.repository }}" >> "$GITHUB_ENV"
           if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
             NP_PASS="${{ github.event.client_payload.np_manager_pass }}"
             echo "::add-mask::${NP_PASS}"
 
-            echo "RUN_ID=${{ github.event.client_payload.run_id }}"                      >> $GITHUB_ENV
-            echo "REPO=${{ github.event.client_payload.repo }}"                          >> $GITHUB_ENV
-            echo "APK_ASSET_ID=${{ github.event.client_payload.apk_asset_id }}"         >> $GITHUB_ENV
-            echo "NP_ASSET_ID=${{ github.event.client_payload.np_asset_id }}"           >> $GITHUB_ENV
-            echo "MT_ASSET_ID=${{ github.event.client_payload.mt_asset_id }}"           >> $GITHUB_ENV
-            echo "APKTOOLM_ASSET_ID=${{ github.event.client_payload.apktoolm_asset_id }}" >> $GITHUB_ENV
-            echo "NP_MANAGER_EMAIL=${{ github.event.client_payload.np_manager_email }}" >> $GITHUB_ENV
-            echo "NP_MANAGER_PASS=${NP_PASS}"                                             >> $GITHUB_ENV
+            echo "RUN_ID=${{ github.event.client_payload.run_id }}"                      >> "$GITHUB_ENV"
+            echo "APK_ASSET_ID=${{ github.event.client_payload.apk_asset_id }}"         >> "$GITHUB_ENV"
+            echo "NP_ASSET_ID=${{ github.event.client_payload.np_asset_id }}"           >> "$GITHUB_ENV"
+            echo "NP_MANAGER_EMAIL=${{ github.event.client_payload.np_manager_email }}" >> "$GITHUB_ENV"
+            echo "NP_MANAGER_PASS=${NP_PASS}"                                           >> "$GITHUB_ENV"
           else
-            echo "RUN_ID=${{ github.event.inputs.run_id }}"                              >> $GITHUB_ENV
-            echo "REPO=Igoanet/apk-emulator-runner"                                      >> $GITHUB_ENV
-            echo "APK_ASSET_ID=${{ github.event.inputs.apk_asset_id }}"                 >> $GITHUB_ENV
-            echo "NP_ASSET_ID=${{ github.event.inputs.np_asset_id }}"                   >> $GITHUB_ENV
-            echo "MT_ASSET_ID=${{ github.event.inputs.mt_asset_id }}"                   >> $GITHUB_ENV
-            echo "APKTOOLM_ASSET_ID=${{ github.event.inputs.apktoolm_asset_id }}"       >> $GITHUB_ENV
+            echo "RUN_ID=${{ github.event.inputs.run_id }}"                              >> "$GITHUB_ENV"
+            echo "APK_ASSET_ID=${{ github.event.inputs.apk_asset_id }}"                 >> "$GITHUB_ENV"
+            echo "NP_ASSET_ID=${{ github.event.inputs.np_asset_id }}"                   >> "$GITHUB_ENV"
           fi
 
       # ── Enable KVM for hardware acceleration ──────────────────────────────
@@ -80,44 +74,43 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # ── Copy automation scripts to home dir ───────────────────────────────
+      # ── Copy NP Manager automation script to home dir ─────────────────────
       - name: Set up automation scripts
         run: |
           mkdir -p ~/github_automation
-          cp github_automation/np_manager_v3.py   ~/github_automation/
-          cp github_automation/mt_manager_auto.py ~/github_automation/
-          cp github_automation/apktool_m_auto.py  ~/github_automation/
+          cp github_automation/np_manager_v3.py ~/github_automation/
           chmod +x github_automation/run_pipeline_v3.sh
 
-      # ── Start Android emulator and run full pipeline ──────────────────────
-      - name: Run Android hardening pipeline
+      # ── Start Android emulator and run NP Manager pipeline ────────────────
+      - name: Run NP Manager on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         env:
+          # gh CLI uses GITHUB_TOKEN automatically on Actions runners
           GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         with:
           api-level: 33
           arch: x86_64
           profile: pixel_6
           ram-size: 4096M
-          heap-size: 1024M
+          heap-size: 512M
           disk-size: 8192M
-          force-avd-creation: false
+          force-avd-creation: true
           emulator-options: >-
             -no-window
             -gpu swiftshader_indirect
             -noaudio
             -no-boot-anim
-            -writable-system
             -no-snapshot-save
           disable-animations: true
           script: bash github_automation/run_pipeline_v3.sh
 
-      # ── Upload output APK as artifact (bot downloads this) ────────────────
+      # ── Upload output APK as artifact ─────────────────────────────────────
       - name: Upload output APK
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fud-pipeline-output-${{ env.RUN_ID }}
+          name: np-pipeline-output-${{ env.RUN_ID }}
           path: |
             ~/fud-work/output/android_hardened.apk
           retention-days: 1
@@ -128,7 +121,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fud-pipeline-logs-${{ env.RUN_ID }}
+          name: np-pipeline-logs-${{ env.RUN_ID }}
           path: |
             ~/fud-work/logs/
             ~/fud-work/output/screenshots/

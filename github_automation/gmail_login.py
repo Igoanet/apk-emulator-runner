@@ -26,6 +26,25 @@ SCREENSHOT_DIR = os.environ.get("SCREENSHOT_DIR", os.path.expanduser("~/fud-work
 EMAIL = os.environ.get("GMAIL_EMAIL", "").strip()
 PASSWORD = os.environ.get("GMAIL_PASS", "")
 SERIAL = os.environ.get("EMULATOR_SERIAL", "emulator-5554")
+REPO = os.environ.get("REPO", "")
+
+
+def publish_2fa_state(state):
+    """2FA number/status ko repo me commit karta hai — running job ke logs API
+    pe live nahi milte, isliye orchestrator (Replit side) ye file gh api se
+    padh ke user ko number turant relay kar sakta hai."""
+    if not REPO:
+        return
+    import base64
+    content = base64.b64encode(state.encode()).decode()
+    r = run(f"gh api repos/{REPO}/contents/2fa_live.txt --jq .sha", timeout=20)
+    sha = r.stdout.strip()
+    cmd = (f'gh api -X PUT repos/{REPO}/contents/2fa_live.txt '
+           f'-f message="2fa live state" -f content="{content}"')
+    if sha and not sha.startswith("{"):
+        cmd += f' -f sha="{sha}"'
+    res = run(cmd, timeout=25)
+    print(f"[LIVE-PUB] {state} (rc={res.returncode})")
 
 
 def run(cmd, timeout=30):
@@ -184,6 +203,7 @@ def main():
     # phone pe approve karta hai, hum poll karke flow ko aage badha dete hain.
     print("[*] Password submit ho gaya — ab 2FA/verify/terms screens handle hongi")
     print("[*] Agar phone pe Google prompt aaye to use approve kar do — main wait kar raha hoon")
+    publish_2fa_state("password_submitted")
     deadline = time.time() + 600  # user approval ka max 10 min wait
     announced_number = announced_phone = False
     logged_in = False
@@ -207,6 +227,7 @@ def main():
                 print(f"### 2FA NUMBER EMULATOR PE DIKHA: {nums[0]} ###")
                 print("### Apne PHONE pe isi number wala option tap karo! ###")
                 print("=" * 64)
+                publish_2fa_state(f"number:{nums[0]}")
                 announced_number = True
 
         # "Check your phone" type screens — user ko phone pe action lena hai
@@ -218,12 +239,14 @@ def main():
             print("### GOOGLE ka prompt aapke PHONE pe gaya hai ###")
             print("### Phone pe 'Yes, it's me' tap karke approve karo! ###")
             print("=" * 64)
+            publish_2fa_state("prompt_sent")
             announced_phone = True
 
         # 2FA approve hote hi account background me add ho jata hai
         r = adb("shell dumpsys account", timeout=15)
         if EMAIL.lower() in r.stdout.lower():
             print(f"[+] Account add ho gaya (dumpsys me mila) — {EMAIL}")
+            publish_2fa_state("approved")
             logged_in = True
             break
 

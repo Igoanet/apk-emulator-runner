@@ -234,6 +234,7 @@ def main():
     publish_2fa_state("password_submitted")
     deadline = time.time() + 600  # user approval ka max 10 min wait
     announced_number = announced_phone = False
+    announced_options = answered = False
     logged_in = False
     while time.time() < deadline:
         xml = get_xml()
@@ -247,16 +248,51 @@ def main():
                 screenshot("hard_block")
                 return 1
 
-        # Number challenge — emulator pe 2-digit number dikhta hai, phone pe match karna hota hai
+        # Number challenge — do variants hote hain:
+        #  A) emulator pe EK number → user phone pe wahi number choose karta hai
+        #  B) emulator pe 3 OPTIONS → phone pe number dikhta hai; user Replit chat
+        #     pe batata hai, hum 2fa_answer.txt se padh ke emulator pe tap karte hain
         if not announced_number:
-            nums = [t.strip() for t in re.findall(r'text="([^"]+)"', xml) if re.fullmatch(r"\d{2}", t.strip())]
-            if nums:
+            attrs = re.findall(r'(?:text|content-desc)="([^"]+)"', xml)
+            seen = []
+            for t in attrs:
+                t = t.strip()
+                if re.fullmatch(r"\d{2}", t) and t not in seen:
+                    seen.append(t)
+            if len(seen) == 1:
                 print("=" * 64)
-                print(f"### 2FA NUMBER EMULATOR PE DIKHA: {nums[0]} ###")
+                print(f"### 2FA NUMBER EMULATOR PE DIKHA: {seen[0]} ###")
                 print("### Apne PHONE pe isi number wala option tap karo! ###")
                 print("=" * 64)
-                publish_2fa_state(f"number:{nums[0]}")
+                publish_2fa_state(f"number:{seen[0]}")
                 announced_number = True
+            elif len(seen) >= 2:
+                opts = seen[:3]
+                print("=" * 64)
+                print(f"### EMULATOR PE OPTIONS DIKHE: {', '.join(opts)} ###")
+                print("### PHONE pe jo number dikha wo 2fa_answer.txt se aayega ###")
+                print("=" * 64)
+                publish_2fa_state(f"options:{','.join(opts)}")
+                announced_number = True
+                announced_options = True
+
+        # Variant B ka jawab — orchestrator (Replit) 2fa_answer.txt me number
+        # commit karta hai; use emulator pe tap karo
+        if announced_options and not answered and REPO:
+            r = run(f"gh api repos/{REPO}/contents/2fa_answer.txt --jq .content", timeout=20)
+            import base64 as _b64
+            raw = r.stdout.strip()
+            ans = ""
+            if raw and not raw.startswith("{"):
+                try:
+                    ans = _b64.b64decode(raw).decode().strip()
+                except Exception:
+                    ans = ""
+            if re.fullmatch(r"\d{2}", ans or ""):
+                print(f"[*] 2fa_answer mila: {ans} — emulator pe tap kar raha hoon")
+                if tap_text(xml, ans, f"2FA option {ans}"):
+                    answered = True
+                    publish_2fa_state("answered")
 
         # "Check your phone" type screens — user ko phone pe action lena hai
         if not announced_phone and (

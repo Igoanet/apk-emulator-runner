@@ -125,6 +125,7 @@ def detect_block(xml):
     low = xml.lower()
     for marker in (
         "couldn't sign in", "couldn\u2019t sign in", "verify it", "verify it's you",
+        "couldn't find your google account", "couldn\u2019t find your google account",
         "captcha", "try again", "too many", "unusual traffic", "phone number",
         "wrong password", "incorrect",
     ):
@@ -149,6 +150,12 @@ def wait_for_edittext(tag, tries=6):
             dump_texts(xml, f"blocked_{tag}")
             screenshot(f"blocked_{tag}")
             return None, block
+        # Sign-in activity crash/dismiss ho ke launcher pe gir gayi — yahan wait
+        # karna bekar hai; caller ko batana hai taaki poora flow retry ho sake.
+        if 'package="com.google.android.apps.nexuslauncher"' in xml:
+            print(f"[!] {tag}: sign-in flow launcher pe gir gaya (crash/dismiss)")
+            screenshot(f"dropped_{tag}")
+            return None, "dropped_to_launcher"
         if tap_first_edittext(xml, f"{tag} field"):
             return xml, None
         time.sleep(3)
@@ -166,32 +173,53 @@ def main():
     # Boot ke turant baad settings slow hoti hai — settle time
     time.sleep(5)
 
-    # 1. Add-account screen → Google
-    adb("shell am start -a android.settings.ADD_ACCOUNT_SETTINGS")
-    time.sleep(5)
-    xml = get_xml("add_account")
-    screenshot("add_account")
-    if not tap_text(xml, "Google", "Google account type"):
-        print("[!] 'Google' option nahi mila — image google_apis hai na? AOSP me ye kaam nahi karta.")
-        screenshot("no_google_option")
-        return 1
-    time.sleep(8)  # sign-in activity load hone me time lagta hai
+    # 1-3. Add-account → Google → email → password. GMS sign-in activity kabhi
+    # kabhi crash/dismiss ho ke launcher pe gir jati hai (email Next ke baad
+    # password screen hi nahi aati) — us case me HOME daba ke poora flow retry.
+    reached_password = False
+    for attempt in range(1, 4):
+        if attempt > 1:
+            print(f"[*] Retry {attempt}/3 — HOME daba ke flow dobara shuru")
+            adb("shell input keyevent KEYCODE_HOME")
+            time.sleep(3)
 
-    # 2. Email
-    xml, err = wait_for_edittext("email_screen")
-    if err:
-        return 1
-    input_text(EMAIL)
-    xml = get_xml()
-    if not (tap_text(xml, "Next", "email Next") or tap_text(xml, "NEXT", "email NEXT")):
-        adb("shell input keyevent 66")  # ENTER fallback
-    time.sleep(8)
-    screenshot("after_email")
+        # 1. Add-account screen → Google
+        adb("shell am start -a android.settings.ADD_ACCOUNT_SETTINGS")
+        time.sleep(5)
+        xml = get_xml("add_account")
+        screenshot("add_account")
+        if not tap_text(xml, "Google", "Google account type"):
+            print("[!] 'Google' option nahi mila — image google_apis hai na? AOSP me ye kaam nahi karta.")
+            screenshot("no_google_option")
+            return 1
+        time.sleep(8)  # sign-in activity load hone me time lagta hai
 
-    # 3. Password
-    xml, err = wait_for_edittext("password_screen")
-    if err:
+        # 2. Email
+        xml, err = wait_for_edittext("email_screen")
+        if err == "dropped_to_launcher":
+            continue
+        if err:
+            return 1
+        input_text(EMAIL)
+        xml = get_xml()
+        if not (tap_text(xml, "Next", "email Next") or tap_text(xml, "NEXT", "email NEXT")):
+            adb("shell input keyevent 66")  # ENTER fallback
+        time.sleep(10)
+        screenshot("after_email")
+
+        # 3. Password
+        xml, err = wait_for_edittext("password_screen", tries=8)
+        if err == "dropped_to_launcher":
+            continue
+        if err:
+            return 1
+        reached_password = True
+        break
+
+    if not reached_password:
+        print("[!] 3 attempts me bhi password screen tak nahi pahunche — GMS sign-in crash ho raha hai")
         return 1
+
     input_text(PASSWORD)
     xml = get_xml()
     if not (tap_text(xml, "Next", "password Next") or tap_text(xml, "NEXT", "password NEXT")):

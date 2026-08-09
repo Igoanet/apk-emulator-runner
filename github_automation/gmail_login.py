@@ -27,24 +27,34 @@ EMAIL = os.environ.get("GMAIL_EMAIL", "").strip()
 PASSWORD = os.environ.get("GMAIL_PASS", "")
 SERIAL = os.environ.get("EMULATOR_SERIAL", "emulator-5554")
 REPO = os.environ.get("REPO", "")
+# REPO shell me interpolate hota hai — strictly owner/repo format enforce karo
+# taaki koi manipulated value shell-injection na kar sake.
+if REPO and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", REPO):
+    print(f"[!] REPO format invalid: {REPO!r} — repo publish/relay disable")
+    REPO = ""
 
 
-def publish_2fa_state(state):
-    """2FA number/status ko repo me commit karta hai — running job ke logs API
+def publish_repo_file(path, state):
+    """Repo me chhota state file commit karta hai — running job ke logs API
     pe live nahi milte, isliye orchestrator (Replit side) ye file gh api se
-    padh ke user ko number turant relay kar sakta hai."""
+    padh ke user ko status/number turant relay kar sakta hai."""
     if not REPO:
         return
     import base64
     content = base64.b64encode(state.encode()).decode()
-    r = run(f"gh api repos/{REPO}/contents/2fa_live.txt --jq .sha", timeout=20)
+    r = run(f"gh api repos/{REPO}/contents/{path} --jq .sha", timeout=20)
     sha = r.stdout.strip()
-    cmd = (f'gh api -X PUT repos/{REPO}/contents/2fa_live.txt '
+    cmd = (f'gh api -X PUT repos/{REPO}/contents/{path} '
            f'-f message="2fa live state" -f content="{content}"')
-    if sha and not sha.startswith("{"):
+    # sirf valid git SHA hi accept karo — shell me interpolate ho raha hai
+    if re.fullmatch(r"[0-9a-f]{40}", sha):
         cmd += f' -f sha="{sha}"'
     res = run(cmd, timeout=25)
-    print(f"[LIVE-PUB] {state} (rc={res.returncode})")
+    print(f"[LIVE-PUB] {path} <- {state!r} (rc={res.returncode})")
+
+
+def publish_2fa_state(state):
+    publish_repo_file("2fa_live.txt", state)
 
 
 def run(cmd, timeout=30):
@@ -100,6 +110,20 @@ def tap_text(xml, text, desc=""):
         tap(c[0], c[1], desc or text)
         return True
     return False
+
+
+def find_attr(xml, value):
+    """text ya content-desc — dono me exact match (bounds ke saath). 2FA options
+    kabhi kabhi sirf content-desc me hote hain; sirf text wala finder unhe tap
+    nahi kar paata."""
+    pat = re.compile(
+        r'<node[^>]*(?:text|content-desc)="' + re.escape(value) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"'
+    )
+    m = pat.search(xml)
+    if m:
+        x1, y1, x2, y2 = map(int, m.groups())
+        return ((x1 + x2) // 2, (y1 + y2) // 2)
+    return None
 
 
 def tap_first_edittext(xml, desc="field"):
@@ -179,8 +203,9 @@ def main():
     reached_password = False
     for attempt in range(1, 4):
         if attempt > 1:
-            print(f"[*] Retry {attempt}/3 — HOME daba ke flow dobara shuru")
+            print(f"[*] Retry {attempt}/3 — HOME + GMS force-stop karke flow dobara shuru")
             adb("shell input keyevent KEYCODE_HOME")
+            adb("shell am force-stop com.google.android.gms")  # adhura sign-in task cancel
             time.sleep(3)
 
         # 1. Add-account screen → Google
@@ -235,6 +260,7 @@ def main():
     deadline = time.time() + 600  # user approval ka max 10 min wait
     announced_number = announced_phone = False
     announced_options = answered = False
+    current_opts = []  # variant B ke 2-digit options — answer validate karne ke liye
     logged_in = False
     while time.time() < deadline:
         xml = get_xml()
@@ -267,17 +293,18 @@ def main():
                 publish_2fa_state(f"number:{seen[0]}")
                 announced_number = True
             elif len(seen) >= 2:
-                opts = seen[:3]
+                current_opts[:] = seen[:3]
                 print("=" * 64)
-                print(f"### EMULATOR PE OPTIONS DIKHE: {', '.join(opts)} ###")
+                print(f"### EMULATOR PE OPTIONS DIKHE: {', '.join(current_opts)} ###")
                 print("### PHONE pe jo number dikha wo 2fa_answer.txt se aayega ###")
                 print("=" * 64)
-                publish_2fa_state(f"options:{','.join(opts)}")
+                publish_2fa_state(f"options:{','.join(current_opts)}")
+                publish_repo_file("2fa_answer.txt", "")  # purana jawab clear — sirf fresh answer chalega
                 announced_number = True
                 announced_options = True
 
         # Variant B ka jawab — orchestrator (Replit) 2fa_answer.txt me number
-        # commit karta hai; use emulator pe tap karo
+        # commit karta hai; wo current options me se ek ho to hi emulator pe tap karo
         if announced_options and not answered and REPO:
             r = run(f"gh api repos/{REPO}/contents/2fa_answer.txt --jq .content", timeout=20)
             import base64 as _b64
@@ -288,9 +315,11 @@ def main():
                     ans = _b64.b64decode(raw).decode().strip()
                 except Exception:
                     ans = ""
-            if re.fullmatch(r"\d{2}", ans or ""):
+            if re.fullmatch(r"\d{2}", ans or "") and ans in current_opts:
                 print(f"[*] 2fa_answer mila: {ans} — emulator pe tap kar raha hoon")
-                if tap_text(xml, ans, f"2FA option {ans}"):
+                c = find_attr(xml, ans)
+                if c:
+                    tap(c[0], c[1], f"2FA option {ans}")
                     answered = True
                     publish_2fa_state("answered")
 
@@ -329,7 +358,7 @@ def main():
             time.sleep(4)
 
     if not logged_in:
-        print("[!] 5 min me 2FA/approval complete nahi hua — live log me banner aaya tha?")
+        print("[!] 10 min me 2FA/approval complete nahi hua — live log me banner aaya tha?")
         dump_texts(get_xml(), "timeout_screen")
         screenshot("timeout_screen")
         return 1

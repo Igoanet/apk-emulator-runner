@@ -34,17 +34,30 @@ jobs:
           command: python3 scripts/ci_patch_android.py
       - run:
           name: Gradle assembleRelease
-          # Lessons (build #2/#3/#4): (a) CMake compiles 10+ min silent → 45m timeout.
-          # (b) Daemon OOM-crash ka culprit RAM nahi, PARALLELISM tha — max-workers=2 pe
-          # per-ABI CMake tasks parallel + ninja khud saare cores pe clang spawn karta hai.
-          # Local recipe (--max-workers=1) hi proven hai; ninja jobs env se cap karo.
-          no_output_timeout: 45m
+          # Lessons (build #2..#5): (a) CMake compiles 10+ min silent → 60m timeout.
+          # (b) Daemon "disappeared" medium(4G) AUR large(8G) dono pe — ab blind-guess band,
+          # on_fail diagnostics step (neeche) asli wajah batayega. Kotlin daemon bhi RAM
+          # khata hai — uska heap cap. x86 APK nahi banta to uska native compile skip.
+          no_output_timeout: 60m
           environment:
             CMAKE_BUILD_PARALLEL_LEVEL: "2"
           command: |
+            java -version
+            free -h
+            df -h /
             cd android
             echo 'org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m' >> gradle.properties
-            ./gradlew assembleRelease --no-daemon --console=plain --max-workers=1
+            echo 'kotlin.daemon.jvmargs=-Xmx1g' >> gradle.properties
+            ./gradlew assembleRelease --no-daemon --console=plain --max-workers=1 -PreactNativeArchitectures=armeabi-v7a,arm64-v8a,x86_64
+      - run:
+          name: Diagnostics (sirf gradle fail ho to)
+          when: on_fail
+          command: |
+            free -h || true
+            df -h / ~ || true
+            ls ~/.gradle/daemon/ 2>/dev/null || true
+            for f in ~/.gradle/daemon/*/daemon-*.out.log; do echo "=== $f ==="; tail -40 "$f"; done
+            for f in $(find ~ /tmp /home/circleci/project -name "hs_err_pid*" -mmin -90 2>/dev/null | head -2); do echo "=== $f ==="; head -60 "$f"; done
       - run:
           name: APK outputs
           command: ls -la android/app/build/outputs/apk/release/

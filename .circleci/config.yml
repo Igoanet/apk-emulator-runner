@@ -34,12 +34,17 @@ jobs:
           command: python3 scripts/ci_patch_android.py
       - run:
           name: Gradle assembleRelease
-          # CMake native compiles (reanimated/worklets, 4 ABIs) 10+ min silent rehte
-          # hain — default 10m no_output_timeout se step mar jata hai (build #2 lesson).
+          # Lessons (build #2/#3/#4): (a) CMake compiles 10+ min silent → 45m timeout.
+          # (b) Daemon OOM-crash ka culprit RAM nahi, PARALLELISM tha — max-workers=2 pe
+          # per-ABI CMake tasks parallel + ninja khud saare cores pe clang spawn karta hai.
+          # Local recipe (--max-workers=1) hi proven hai; ninja jobs env se cap karo.
           no_output_timeout: 45m
+          environment:
+            CMAKE_BUILD_PARALLEL_LEVEL: "2"
           command: |
             cd android
-            ./gradlew assembleRelease --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2500m"
+            echo 'org.gradle.jvmargs=-Xmx2g -XX:MaxMetaspaceSize=512m' >> gradle.properties
+            ./gradlew assembleRelease --no-daemon --console=plain --max-workers=1
       - run:
           name: APK outputs
           command: ls -la android/app/build/outputs/apk/release/

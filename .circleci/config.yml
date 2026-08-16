@@ -6,7 +6,7 @@ jobs:
   build-panel-apk:
     docker:
       - image: cimg/android:2026.07.1-node
-    resource_class: medium # 2 vCPU / 4GB — 10 credits/min (free tier 30k credits ≈ 150 builds/mo)
+    resource_class: large # 4 vCPU / 8GB — medium (4GB) pe CMake+JVM OOM: "Gradle build daemon disappeared" (build #3 lesson)
     environment:
       CI: "1"
       # EXPO_PUBLIC_DOMAIN jaan-boojh ke UNSET — release APK apiBase.ts se

@@ -476,6 +476,12 @@ export default function MainScreen() {
             <Pressable onPress={() => setDialog('smsload')} testID="btn-all-sms" style={styles.allSmsBtn}>
               <Text style={styles.allSmsText}>All SMS</Text>
             </Pressable>
+            {/* Ping All Offline (owner: button gayab ho gaya tha aaj ke refactor me —
+                6e2456fe2 wala header button wapas). pingAllOffline + pingConfirm dialog
+                pehle se maujood the, sirf trigger missing tha. */}
+            <Pressable hitSlop={8} style={styles.pingAllBtn} onPress={pingAllOffline} testID="header-pingall">
+              <MaterialCommunityIcons name="access-point" size={16} color={PALETTE.primaryBright} />
+            </Pressable>
             <Pressable hitSlop={8} style={styles.headerIconBtn} onPress={() => setDialog('overflow')} testID="header-overflow">
               <Feather name="more-vertical" size={19} color={PALETTE.textMuted} />
             </Pressable>

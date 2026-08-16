@@ -146,9 +146,10 @@ function ClientRow({ item, onPing, onDelete, onToggleStar }: { item: Client; onP
             <Text style={[styles.status, { color: item.online ? PALETTE.greenBright : PALETTE.red }]}>Status: {item.status}</Text>
             {/* Ping button (owner request 2026-08-16) — device ko wake/signal bhejta
                 hai; reply aaye to events se online status update hota hai */}
-            <Pressable hitSlop={8} onPress={onPing} style={{ padding: 6 }} testID={`ping-${item.id}`}>
-              {/* Icon wifi NAHI hona chahiye (owner feedback 2026-08-16) — pulse/heartbeat = "device zinda hai?" */}
-              <Feather name="activity" size={17} color={PALETTE.primaryBright} />
+            {/* Ping button ROUND rakhna hai (owner feedback 2026-08-16) — pingAllBtn jaisa
+                bordered circle; icon pulse/heartbeat (wifi nahi) = "device zinda hai?" */}
+            <Pressable hitSlop={8} onPress={onPing} style={styles.pingAllBtn} testID={`ping-${item.id}`}>
+              <Feather name="activity" size={15} color={PALETTE.primaryBright} />
             </Pressable>
             <Pressable hitSlop={8} onPress={onToggleStar} style={{ padding: 6 }} testID={`star-${item.id}`}>
               {/* Ribbon/bookmark icon (owner request 2026-08-15) — star nahi, label-ribbon style */}

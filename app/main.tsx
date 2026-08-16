@@ -144,12 +144,9 @@ function ClientRow({ item, onPing, onDelete, onToggleStar }: { item: Client; onP
 
           <View style={styles.actionRow}>
             <Text style={[styles.status, { color: item.online ? PALETTE.greenBright : PALETTE.red }]}>Status: {item.status}</Text>
-            {/* Ping button (owner request 2026-08-16) — device ko wake/signal bhejta
-                hai; reply aaye to events se online status update hota hai */}
-            {/* Ping button ROUND rakhna hai (owner feedback 2026-08-16) — pingAllBtn jaisa
-                bordered circle; icon pulse/heartbeat (wifi nahi) = "device zinda hai?" */}
-            <Pressable hitSlop={8} onPress={onPing} style={styles.pingAllBtn} testID={`ping-${item.id}`}>
-              <Feather name="activity" size={15} color={PALETTE.primaryBright} />
+            {/* Order (owner feedback 2026-08-16): Delete | Ribbon | Ping — ribbon delete aur ping ke BEECH me */}
+            <Pressable hitSlop={8} style={styles.trashBtn} onPress={onDelete} testID={`delete-${item.id}`}>
+              <Feather name="trash-2" size={17} color={PALETTE.textMuted} />
             </Pressable>
             <Pressable hitSlop={8} onPress={onToggleStar} style={{ padding: 6 }} testID={`star-${item.id}`}>
               {/* Ribbon/bookmark icon (owner request 2026-08-15) — star nahi, label-ribbon style */}
@@ -159,8 +156,10 @@ function ClientRow({ item, onPing, onDelete, onToggleStar }: { item: Client; onP
                 color={item.favorite ? PALETTE.amber : PALETTE.textMuted}
               />
             </Pressable>
-            <Pressable hitSlop={8} style={styles.trashBtn} onPress={onDelete} testID={`delete-${item.id}`}>
-              <Feather name="trash-2" size={17} color={PALETTE.textMuted} />
+            {/* Ping button (owner request 2026-08-16) — device ko wake/signal bhejta hai;
+                ROUND bordered circle (pingAllBtn style) rakhna hai, icon pulse/heartbeat (wifi nahi) */}
+            <Pressable hitSlop={8} onPress={onPing} style={styles.pingAllBtn} testID={`ping-${item.id}`}>
+              <Feather name="activity" size={15} color={PALETTE.primaryBright} />
             </Pressable>
           </View>
         </View>

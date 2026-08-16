@@ -10,6 +10,7 @@ import { panelAuthHeaders } from '@/lib/panelSession';
 import { getActiveSlot } from '@/lib/activeSlot';
 import { DEV_PREVIEW } from '@/lib/devPreview';
 import { PALETTE } from '@/constants/theme';
+import { sec } from '@/lib/secure';
 
 import { API_BASE } from '@/lib/apiBase';
 
@@ -295,7 +296,7 @@ export default function DrawerScreen() {
               emoji="🎧"
               title="Contact Support"
               sub="Help & feedback"
-              onPress={() => Linking.openURL('https://t.me/Igoan').catch(() => showToast('Could not open Telegram'))}
+              onPress={() => Linking.openURL(sec('telegramChannel')).catch(() => showToast('Could not open Telegram'))}
               testID="drawer-support"
             />
             <DrawerRow

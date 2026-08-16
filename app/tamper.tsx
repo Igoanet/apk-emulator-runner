@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { ScreenShell } from '@/components/panel/ScreenShell';
 import { GradientButton, OutlineButton } from '@/components/panel/ui';
 import { PALETTE } from '@/constants/theme';
+import { sec } from '@/lib/secure';
 
 // Exact replica of activity_tampering.xml — text-only lockout screen,
 // two side-by-side buttons, no icon artwork.
@@ -17,7 +18,7 @@ export default function TamperScreen() {
         <Text style={styles.note}>Admin password is not configured or changed from this app.</Text>
 
         <View style={styles.btnRow}>
-          <GradientButton label="Contact @Igoan" onPress={() => Linking.openURL('https://t.me/Igoan')} testID="btn-contact" style={{ flex: 1 }} />
+          <GradientButton label="Contact @Igoan" onPress={() => Linking.openURL(sec('telegramChannel'))} testID="btn-contact" style={{ flex: 1 }} />
           <OutlineButton label="Exit app" onPress={() => router.replace('/' as const)} testID="btn-exit-app" style={{ flex: 1 }} />
         </View>
       </ScrollView>

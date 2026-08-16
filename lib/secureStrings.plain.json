@@ -1,0 +1,5 @@
+{
+  "//": "PLAINTEXT source of truth — SIRF private repo me rehti hai, APK bundle me KABHI nahi jati (koi app file ise import nahi karti). Badalne ke baad `node scripts/encrypt-strings.mjs` chalao — wo lib/secureStrings.ts (ciphertext) regenerate karega. App code hamesha sec(\"naam\") se value leta hai.",
+  "apiBaseProd": "https://backend-production-1d65.up.railway.app",
+  "telegramChannel": "https://t.me/Igoan"
+}

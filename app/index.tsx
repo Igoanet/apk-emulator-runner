@@ -10,6 +10,7 @@ import { loadPanelToken, setPanelToken } from '@/lib/panelSession';
 import { getDeviceId } from '@/lib/deviceId';
 import { applySupabaseSession } from '@/lib/supabase';
 import { DEV_PREVIEW } from '@/lib/devPreview';
+import { sec } from '@/lib/secure';
 
 // Premium Bomber reference (user ka screenshot) ka exact layout:
 // purple ring logo → Igoan Panel → Powered by Igoan → Access Key card (green Activate)
@@ -379,7 +380,7 @@ export default function LoginScreen() {
         {/* Contact Support card — reference style (icon box + text + chevron + @Igoan row) */}
         <Pressable
           style={({ pressed }) => [styles.supportCard, pressed && { opacity: 0.85 }]}
-          onPress={() => Linking.openURL('https://t.me/Igoan')}
+          onPress={() => Linking.openURL(sec('telegramChannel'))}
           testID="btn-tutorial"
         >
           <View style={styles.supportRow}>

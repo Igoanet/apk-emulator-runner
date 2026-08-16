@@ -34,6 +34,9 @@ jobs:
           command: python3 scripts/ci_patch_android.py
       - run:
           name: Gradle assembleRelease
+          # CMake native compiles (reanimated/worklets, 4 ABIs) 10+ min silent rehte
+          # hain — default 10m no_output_timeout se step mar jata hai (build #2 lesson).
+          no_output_timeout: 45m
           command: |
             cd android
             ./gradlew assembleRelease --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2500m"

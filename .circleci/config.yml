@@ -22,10 +22,26 @@ jobs:
           name: Install dependencies (frozen lockfile)
           command: pnpm install --frozen-lockfile
       - run:
-          name: Android SDK licenses + components
+          name: Android SDK licenses + components + ninja RAM cap
           command: |
             yes | sdkmanager --licenses > /dev/null || true
-            sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" "ndk;27.1.12297006"
+            sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+            # NINJA CAP (build #3-#6 ka asli culprit): AGP ninja binary ko DIRECT call karta
+            # hai (CMAKE_BUILD_PARALLEL_LEVEL env ignore hota hai) — default saare cores pe
+            # clang spawn karta hai. 4 clang x ~2GB + gradle JVM 2GB = 8GB cross → OOM killer
+            # gradle daemon ko SIGKILL ("disappeared unexpectedly"). Real ninja ko wrapper
+            # se -j2 pe cap karo.
+            NINJA="$ANDROID_HOME/cmake/3.22.1/bin/ninja"
+            mv "$NINJA" "$NINJA.real"
+            printf '#!/bin/bash\nexec "%s.real" -j2 "$@"\n' "$NINJA" > "$NINJA"
+            chmod +x "$NINJA"
+            "$NINJA" --version
+      - run:
+          name: JDK 17 (local recipe parity)
+          # cimg/android:2026.07 default JDK 21 deta hai; local proven recipe JDK 17 hai.
+          command: |
+            sudo apt-get update -qq && sudo apt-get install -y -qq openjdk-17-jdk-headless > /dev/null
+            /usr/lib/jvm/java-17-openjdk-amd64/bin/java -version
       - run:
           name: Expo prebuild (android/ generate)
           command: CI=1 npx expo prebuild --platform android --no-install
@@ -40,7 +56,7 @@ jobs:
           # khata hai — uska heap cap. x86 APK nahi banta to uska native compile skip.
           no_output_timeout: 60m
           environment:
-            CMAKE_BUILD_PARALLEL_LEVEL: "2"
+            JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           command: |
             java -version
             free -h

@@ -147,7 +147,8 @@ function ClientRow({ item, onPing, onDelete, onToggleStar }: { item: Client; onP
             {/* Ping button (owner request 2026-08-16) — device ko wake/signal bhejta
                 hai; reply aaye to events se online status update hota hai */}
             <Pressable hitSlop={8} onPress={onPing} style={{ padding: 6 }} testID={`ping-${item.id}`}>
-              <Feather name="wifi" size={17} color={PALETTE.primaryBright} />
+              {/* Icon wifi NAHI hona chahiye (owner feedback 2026-08-16) — pulse/heartbeat = "device zinda hai?" */}
+              <Feather name="activity" size={17} color={PALETTE.primaryBright} />
             </Pressable>
             <Pressable hitSlop={8} onPress={onToggleStar} style={{ padding: 6 }} testID={`star-${item.id}`}>
               {/* Ribbon/bookmark icon (owner request 2026-08-15) — star nahi, label-ribbon style */}
@@ -480,7 +481,8 @@ export default function MainScreen() {
                 6e2456fe2 wala header button wapas). pingAllOffline + pingConfirm dialog
                 pehle se maujood the, sirf trigger missing tha. */}
             <Pressable hitSlop={8} style={styles.pingAllBtn} onPress={pingAllOffline} testID="header-pingall">
-              <MaterialCommunityIcons name="access-point" size={16} color={PALETTE.primaryBright} />
+              {/* Row ping (Feather activity) se consistent — pulse, wifi/access-point nahi */}
+              <MaterialCommunityIcons name="pulse" size={16} color={PALETTE.primaryBright} />
             </Pressable>
             <Pressable hitSlop={8} style={styles.headerIconBtn} onPress={() => setDialog('overflow')} testID="header-overflow">
               <Feather name="more-vertical" size={19} color={PALETTE.textMuted} />

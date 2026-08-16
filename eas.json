@@ -1,0 +1,25 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "preview": {
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_DOMAIN": "backend-production-1d65.up.railway.app",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://vdmxdclaizspdfqiowvv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_SmUmzCyWYLBXYq0uiSgCBA_p8efk6Qw"
+      }
+    },
+    "production": {
+      "env": {
+        "EXPO_PUBLIC_DOMAIN": "backend-production-1d65.up.railway.app",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://vdmxdclaizspdfqiowvv.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_SmUmzCyWYLBXYq0uiSgCBA_p8efk6Qw"
+      }
+    }
+  }
+}

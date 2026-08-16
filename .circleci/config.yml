@@ -1,0 +1,53 @@
+# Igoan Panel APK — CircleCI build (local gradle recipe ka CI port)
+# Trigger: ci-build branch pe push (snapshot repo — sirf panel source, no secrets)
+version: 2.1
+
+jobs:
+  build-panel-apk:
+    docker:
+      - image: cimg/android:2026.07.1-node
+    resource_class: medium # 2 vCPU / 4GB — 10 credits/min (free tier 30k credits ≈ 150 builds/mo)
+    environment:
+      CI: "1"
+      # EXPO_PUBLIC_DOMAIN jaan-boojh ke UNSET — release APK apiBase.ts se
+      # Railway production (backend-production-1d65.up.railway.app) pe fallback karta hai.
+      EXPO_PUBLIC_SUPABASE_URL: "https://vdmxdclaizspdfqiowvv.supabase.co"
+      EXPO_PUBLIC_SUPABASE_ANON_KEY: "sb_publishable_SmUmzCyWYLBXYq0uiSgCBA_p8efk6Qw"
+    steps:
+      - checkout
+      - run:
+          name: pnpm setup
+          command: npm i -g pnpm@10 && pnpm --version
+      - run:
+          name: Install dependencies (frozen lockfile)
+          command: pnpm install --frozen-lockfile
+      - run:
+          name: Android SDK licenses + components
+          command: |
+            yes | sdkmanager --licenses > /dev/null || true
+            sdkmanager "platforms;android-35" "platforms;android-36" "build-tools;35.0.0" "build-tools;36.0.0" "ndk;27.1.12297006"
+      - run:
+          name: Expo prebuild (android/ generate)
+          command: CI=1 npx expo prebuild --platform android --no-install
+      - run:
+          name: Native patches (allowBackup=false + ABI splits)
+          command: python3 scripts/ci_patch_android.py
+      - run:
+          name: Gradle assembleRelease
+          command: |
+            cd android
+            ./gradlew assembleRelease --no-daemon --console=plain --max-workers=2 -Dorg.gradle.jvmargs="-Xmx2500m"
+      - run:
+          name: APK outputs
+          command: ls -la android/app/build/outputs/apk/release/
+      - store_artifacts:
+          path: android/app/build/outputs/apk/release
+          destination: apk
+
+workflows:
+  build-apk:
+    jobs:
+      - build-panel-apk:
+          filters:
+            branches:
+              only: ci-build

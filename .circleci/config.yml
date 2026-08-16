@@ -17,7 +17,7 @@ jobs:
       - checkout
       - run:
           name: pnpm setup
-          command: npm i -g pnpm@10 && pnpm --version
+          command: sudo npm i -g pnpm@10 && pnpm --version
       - run:
           name: Install dependencies (frozen lockfile)
           command: pnpm install --frozen-lockfile

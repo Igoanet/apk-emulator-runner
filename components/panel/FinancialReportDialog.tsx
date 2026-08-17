@@ -4,6 +4,7 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PanelModal } from '@/components/panel/ui';
 import { PALETTE } from '@/constants/theme';
+import { parseFinancialSms, type FinSms } from '@/lib/financialParse';
 
 // ── V7 "Financial Dashboard" (GianPanel V7.O dialog_financial_report.xml +
 // item_fin_bank_row.xml) ka dark-theme port. Structure exact wahi:
@@ -13,36 +14,9 @@ import { PALETTE } from '@/constants/theme';
 // tap → Total Debit / Total Credit / SMS Count + Parsed Bank SMS History) →
 // summary + disclaimer.
 
-export interface BankRow {
-  name: string;
-  accHint: string;      // e.g. "**2679"
-  count: number;        // SMS count
-  debit: number;
-  credit: number;
-  balance: number;      // latest available balance hint
-  creditAvail: number;  // credit card available limit (0 = n/a)
-  creditOut: number;    // credit card outstanding (0 = n/a)
-  messages: string[];
-}
-
-// Fake preview data (DEV_PREVIEW) — numbers ab numeric hain taaki hero totals
-// sach me compute hon, hardcoded string nahi.
-const BANKS: BankRow[] = [
-  {
-    name: 'Axis Bank', accHint: '**2679', count: 18, debit: 533, credit: 0, balance: 926.48, creditAvail: 0, creditOut: 0,
-    messages: [
-      'Rs.1.00 Dr. from A/C XXXXXX2679 and Cr. to gauridmore02@okaxis. Ref:032294747829. AvlBal:Rs2455.00(2025-09-01 04:43:21). Not you? Call 18005700/5000-BOB',
-      'Rs.10.00 Dr. from A/C XXXXXX2679 and Cr. to 9767286760@okbizaxis. Ref:524473405639. AvlBal:Rs2385.00(2025-09-01 04:55:12). Not you? Call 18005700/5000-BOB',
-      'Rs.30.00 Dr. from A/C XXXXXX2679 and Cr. to gpay-11240310104@okbizaxis. Ref:758991315214. AvlBal:Rs3755.00(2025-09-04 06:43:42). Not you? Call 18005700/5000-BOB',
-      'Rs.10.00 Dr. from A/C XXXXXX2679 and Cr. to gpay-1124607355@okbizaxis. Ref:172915050455. AvlBal:Rs2713.00(2025-09-14 03:46:22). Not you? Call 18005700/5000-BOB',
-    ],
-  },
-  { name: 'Bank of Baroda', accHint: '**2679', count: 42, debit: 4120, credit: 6300, balance: 2455.00, creditAvail: 0, creditOut: 0, messages: ['Your request for deseeding of Aadhaar from your A/C XXX2679 is successful. If not initiated by you, call 18005700 - BOB'] },
-  { name: 'Bank of Maharashtra', accHint: '**1190', count: 9, debit: 250, credit: 1000, balance: 1150, creditAvail: 0, creditOut: 0, messages: ['Rs.250 debited from A/C XX1190 on 28-07-2026. Avl bal Rs.1,150.'] },
-  { name: 'HDFC Bank', accHint: '**4521', count: 61, debit: 8450, credit: 18240, balance: 18240, creditAvail: 52000, creditOut: 12650, messages: ['Rs.5000 credited to a/c XX4521 on 28-JUL. Avl bal Rs.18,240.'] },
-  { name: 'ICICI Bank', accHint: '**901', count: 33, debit: 3368.99, credit: 12727.50, balance: 9358.51, creditAvail: 0, creditOut: 0, messages: ['ICICI Bank Acct XX901 debited with Rs.1,299.00 on 28-Jul-26.'] },
-  { name: 'State Bank of India', accHint: '**7741', count: 58, debit: 1299, credit: 16000, balance: 14701, creditAvail: 0, creditOut: 0, messages: ['Your OTP for txn of Rs.12,000 is 448190. Valid 10 min. Do not share.'] },
-];
+// DATA: koi hardcoded/demo banks NAHI (owner rule 2026-08-17) — dashboard har
+// device ke ASLI SMS log se parse hota hai (lib/financialParse.ts). Device ke
+// SMS me bank SMS nahi to empty state dikhti hai, fake numbers kabhi nahi.
 
 // Indian grouping + 2 decimals jab fraction ho (V7 "₹0.00" format)
 const inr = (n: number) => {
@@ -51,21 +25,26 @@ const inr = (n: number) => {
 };
 const inr2 = (n: number) => `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-export function FinancialReportDialog({ visible, onClose, label, phone }: { visible: boolean; onClose: () => void; label: string; phone: string }) {
+export function FinancialReportDialog({ visible, onClose, label, phone, messages }: { visible: boolean; onClose: () => void; label: string; phone: string; messages: FinSms[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+
+  // PER-DEVICE real parse — is device ke SMS se banks/amounts nikalte hain.
+  const banks = useMemo(() => parseFinancialSms(messages), [messages]);
 
   // Hero totals — V7 jaise: total balance = banks ke latest balance ka sum;
   // debit/credit chips = sab banks ke totals; credit avail/outstanding alag.
   const agg = useMemo(() => ({
-    totalBal: BANKS.reduce((a, b) => a + b.balance, 0),
-    totalDebit: BANKS.reduce((a, b) => a + b.debit, 0),
-    totalCredit: BANKS.reduce((a, b) => a + b.credit, 0),
-    creditAvail: BANKS.reduce((a, b) => a + b.creditAvail, 0),
-    creditOut: BANKS.reduce((a, b) => a + b.creditOut, 0),
-    sms: BANKS.reduce((a, b) => a + b.count, 0),
-  }), []);
+    totalBal: banks.reduce((a, b) => a + b.balance, 0),
+    totalDebit: banks.reduce((a, b) => a + b.debit, 0),
+    totalCredit: banks.reduce((a, b) => a + b.credit, 0),
+    creditAvail: banks.reduce((a, b) => a + b.creditAvail, 0),
+    creditOut: banks.reduce((a, b) => a + b.creditOut, 0),
+    sms: banks.reduce((a, b) => a + b.count, 0),
+  }), [banks]);
 
-  const summary = `${BANKS.length} banks · ${agg.sms} SMS parsed\nBanks: ${BANKS.map((b) => b.name).join(', ')}\nTotal debit ${inr(agg.totalDebit)} · Total credit ${inr(agg.totalCredit)}`;
+  const summary = banks.length === 0
+    ? 'Is device ke SMS me koi bank transaction SMS nahi mila.'
+    : `${banks.length} banks · ${agg.sms} SMS parsed\nBanks: ${banks.map((b) => b.name).join(', ')}\nTotal debit ${inr(agg.totalDebit)} · Total credit ${inr(agg.totalCredit)}`;
 
   return (
     <PanelModal visible={visible} onClose={onClose}>
@@ -100,10 +79,18 @@ export function FinancialReportDialog({ visible, onClose, label, phone }: { visi
         <View style={s.banksCard}>
           <View style={s.banksHead}>
             <Text style={s.banksTitle}>Connected Banks</Text>
-            <View style={s.banksCountChip}><Text style={s.banksCountText}>{`${BANKS.length} Banks`}</Text></View>
+            <View style={s.banksCountChip}><Text style={s.banksCountText}>{`${banks.length} Banks`}</Text></View>
           </View>
 
-          {BANKS.map((b) => {
+          {banks.length === 0 && (
+            <View style={s.emptyBox}>
+              <Feather name="inbox" size={22} color={PALETTE.textFaint} />
+              <Text style={s.emptyTitle}>No bank SMS found</Text>
+              <Text style={s.emptyText}>Is device ke SMS log me koi bank transaction message nahi mila. Bank SMS aane pe dashboard apne aap real figures dikhayega.</Text>
+            </View>
+          )}
+
+          {banks.map((b) => {
             const open = expanded === b.name;
             return (
               <Pressable key={b.name} onPress={() => setExpanded(open ? null : b.name)} style={s.bankRow} testID={`fin-bank-${b.name}`}>
@@ -199,4 +186,9 @@ const s = StyleSheet.create({
 
   summaryText: { color: PALETTE.textMuted, fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 18, marginTop: 12 },
   disclaimer: { color: PALETTE.textFaint, fontSize: 11, fontFamily: 'Inter_400Regular', marginTop: 6, marginBottom: 6 },
+
+  // Empty state — device ke SMS me koi bank SMS nahi mila to
+  emptyBox: { alignItems: 'center', paddingVertical: 22, paddingHorizontal: 16 },
+  emptyTitle: { color: PALETTE.textMuted, fontSize: 14, fontFamily: 'Inter_700Bold', marginTop: 8 },
+  emptyText: { color: PALETTE.textFaint, fontSize: 11, fontFamily: 'Inter_400Regular', textAlign: 'center', marginTop: 4, lineHeight: 16 },
 });

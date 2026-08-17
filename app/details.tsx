@@ -355,7 +355,7 @@ export default function DetailsScreen() {
       />
 
       <ForwardingDialog visible={dialog === 'forward'} onClose={() => setDialog(null)} deviceId={client.id} onApplied={(_ok, msg) => showToast(msg)} />
-      <FinancialReportDialog visible={dialog === 'report'} onClose={() => setDialog(null)} label={label} phone={client.phone} />
+      <FinancialReportDialog visible={dialog === 'report'} onClose={() => setDialog(null)} label={label} phone={client.phone} messages={client.messages} />
       <LabelPickerDialog
         visible={dialog === 'label'}
         onClose={() => setDialog(null)}

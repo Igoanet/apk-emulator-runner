@@ -200,10 +200,8 @@ export default function AutoVerifyScreen() {
       const res = await connectChannel(trimmed);
       if (!res.ok || !res.key) {
         setAddError(
-          res.error === 'not_channel_admin'
-            ? 'Connect sirf channel ke ADMIN kar sakte hain — tum is channel ke admin nahi dikhte.'
-            : res.error === 'bot_not_admin'
-            ? `INACTIVE — bot "${res.channelTitle || 'is channel'}" me admin nahi hai. Pehle admin banao, phir try karo.`
+          res.error === 'bot_not_admin'
+            ? `Bot "${res.channelTitle || 'is channel'}" me admin nahi hai — pehle Igoan Panel bot ko channel admin banao, phir try karo.`
             : res.error === 'channel_not_found'
               ? 'Channel nahi mila — pehle bot ko channel me add/admin banao.'
               : res.error === 'key_cap_reached'

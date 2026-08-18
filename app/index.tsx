@@ -65,8 +65,7 @@ export default function LoginScreen() {
   const [otp, setOtp] = useState('');
   const [stage, setStage] = useState<'creds' | 'otp'>('creds');
   const [notice, setNotice] = useState('');
-  const [resendsUsed, setResendsUsed] = useState(0); // owner rule: login OTP + 5 resend per chain, phir 60s cooldown
-  const [resendWait, setResendWait] = useState(0); // owner rule: do sends ke beech min 30s — live countdown
+  const [resendWait, setResendWait] = useState(0); // har do sends ke beech min 30s — live countdown
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(true); // saved-session auto-resume
@@ -163,7 +162,6 @@ export default function LoginScreen() {
         setStage('otp');
         setOtp('');
         setNotice('');
-        setResendsUsed(1); // pehla OTP login ne bheja — ab 5 resend bache
         setResendWait(30); // agla OTP min 30s baad hi (server bhi enforce karta hai)
         return;
       }
@@ -183,7 +181,6 @@ export default function LoginScreen() {
           setOtp('');
           setError('');
           setNotice('OTP abhi-abhi tumhare Telegram pe bheja gaya hai — check karo. Naya chahiye to timer ke baad Resend dabao.');
-          setResendsUsed(1);
           setResendWait(Math.max(1, data.retryAfterSec));
           return;
         }
@@ -205,8 +202,7 @@ export default function LoginScreen() {
     }
   };
 
-  // Resend (owner rule): chain me login OTP + max 5 resend; har send ke beech 30s
-  // gap (server bhi enforce karta hai) — quota khatam pe 60s cooldown.
+  // Resend: unlimited — sirf 30s gap zaroori (server bhi enforce karta hai).
   const resendOtp = async () => {
     if (busy || resendWait > 0) return;
     setBusy(true);
@@ -220,7 +216,6 @@ export default function LoginScreen() {
       });
       const data = await r.json().catch(() => ({}));
       if (r.ok) {
-        setResendsUsed((n) => n + 1);
         setResendWait(30);
         setOtp('');
         setNotice('Naya OTP Telegram pe bheja gaya ✓');
@@ -232,13 +227,9 @@ export default function LoginScreen() {
         return;
       }
       if (data.error === 'cooldown') {
-        const waitSec = typeof data.retryAfterSec === 'number' && data.retryAfterSec > 0 ? data.retryAfterSec : 60;
-        setResendWait(waitSec); // server ke hisaab se countdown — 30s gap ya 60s lockout
-        setError(
-          waitSec <= 30
-            ? `30 second ka gap hai — ${waitSec}s baad resend karo`
-            : `5 resend ho gaye — ${waitSec} second ka cooldown, uske baad phir 5 milenge`,
-        );
+        const waitSec = typeof data.retryAfterSec === 'number' && data.retryAfterSec > 0 ? data.retryAfterSec : 30;
+        setResendWait(waitSec); // server ke hisaab se countdown
+        setError(`${waitSec}s baad resend karo`);
         return;
       }
       setError(
@@ -369,7 +360,7 @@ export default function LoginScreen() {
               </Pressable>
               <Pressable onPress={resendOtp} disabled={busy || resendWait > 0} testID="btn-resend-otp" style={({ pressed }) => [styles.resendBtn, (pressed || busy || resendWait > 0) && { opacity: 0.6 }]}>
                 <Text style={styles.resendText}>
-                  {resendWait > 0 ? `Resend ${resendWait}s baad available` : `OTP nahi aaya? Resend (${Math.max(0, 6 - resendsUsed)} left)`}
+                  {resendWait > 0 ? `Resend ${resendWait}s baad available` : 'OTP nahi aaya? Resend karo'}
                 </Text>
               </Pressable>
               {/* "Wapas" link REMOVED (owner rule 2026-08-13) — naya OTP ke liye yahi Resend hai */}

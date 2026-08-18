@@ -1,74 +1,105 @@
-// Aadhaar fetch engine — multi-step API flow (number → OTP1 → OTP2 → result).
+// Aadhaar fetch engine — multi-step API flow (phone → OTP1 → OTP2 → result).
 //
-// USER FLOW (confirmed):
-//   1. API phone number maangta hai  → hum linked phone bhejte hain
-//   2. API pehla OTP maangta hai     → hum OTP1 bhejte hain
-//   3. API doosra OTP maangta hai    → hum OTP2 bhejte hain
-//   4. API { text, photos[], pdf } return karta hai
-//   5. Text + PDF Saved section (device Notes) me rakhte hain
+// USER FLOW:
+//   1. Phone number bhejo  → API OTP1 bhejta hai
+//   2. OTP1 submit karo    → API OTP2 bhejta hai
+//   3. OTP2 submit karo    → API Aadhaar text + photos + PDF return karta hai
+//   4. Result device ke Notes me save hota hai
 //
-// API NAHI MILI ABHI. Neeche teen functions hi wo *SEAM* hain — jab owner API
-// dega, sirf inke andar real HTTP call bhar dena hai. Abhi demo/local mock hai.
+// Server proxy (/api/panel/aadhaar/lookup) API key hide karta hai —
+// app ko key kabhi nahi milti (owner hardening rule).
 
 export interface AadhaarPhoto {
-  uri?: string;       // real API se aane wala photo url/file — mila to render hoga
-  label: string;      // e.g. "Photo 1"
+  uri?: string;   // real URL/file — mila to render hoga
+  label: string;
 }
 
 export interface AadhaarResult {
-  text: string;       // Aadhaar details text (name, DOB, address, etc.)
+  text: string;         // Aadhaar details (name, DOB, address, etc.)
   photos: AadhaarPhoto[];
-  pdfName: string;    // PDF file ka naam — Notes me record hota hai
-  pdfUri?: string;    // real PDF url/file — mila to save ho sakta hai
+  pdfName: string;
+  pdfUri?: string;
 }
 
 export interface AadhaarError {
   ok: false;
-  error: string; // Hinglish, user ko dikhana hai
+  error: string; // Hinglish — user ko dikhana hai
 }
 
 import { hasActiveApi } from './apiRegistry';
+import { API_BASE } from './apiBase';
+import { panelAuthHeaders } from './panelSession';
 
-// ---- THE SEAM — ye teen functions API ke endpoints banenge ----
+// Module-level session state — dialog ek flow me teen calls karta hai
+let _phone = '';
+let _sessionId = '';
 
-// Step 0: phone submit → demo me hamesha ok. Real me: POST /aadhaar/init {phone}
+async function proxyLookup(body: Record<string, unknown>): Promise<Response> {
+  return fetch(`${API_BASE}/api/panel/aadhaar/lookup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...panelAuthHeaders() },
+    body: JSON.stringify(body),
+  });
+}
+
+// Step 0: phone submit karo → provider OTP1 bhejta hai
 export async function aadhaarInit(phone: string): Promise<{ ok: true } | AadhaarError> {
-  // Owner-managed registry — Aadhaar API remove hui to poora flow yahin band.
   if (!(await hasActiveApi('aadhaar'))) {
     return { ok: false, error: 'Aadhaar API abhi band hai — owner ne remove ki hai. Baad me try karo.' };
   }
-  // TODO: owner ka API yahan (URL server-side registry me). Abhi demo.
-  if (!/^\+?\d{10,13}$/.test(phone.replace(/[\s-]/g, ''))) {
-    return { ok: false, error: 'Valid phone number daalo — 10 digit ya koi format.' };
+  const norm = phone.replace(/[\s\-()]/g, '');
+  if (!/^\+?\d{10,13}$/.test(norm)) {
+    return { ok: false, error: 'Valid phone number daalo — 10 digit (ya +91 ke saath).' };
   }
-  return { ok: true };
+  try {
+    const r = await proxyLookup({ step: 'init', phone: norm });
+    const d = await r.json().catch(() => ({})) as Record<string, unknown>;
+    if (!r.ok) return { ok: false, error: (d.error as string) ?? `Aadhaar server error (${r.status})` };
+    _phone = norm;
+    _sessionId = (d.sessionId ?? d.session ?? d.txn_id ?? '') as string;
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Panel unreachable — internet check karo.' };
+  }
 }
 
-// Step 1: OTP1 submit → demo me hamesha ok. Real me: POST /aadhaar/otp1 {phone, otp}
-export async function aadhaarSubmitOtp1(_otp: string): Promise<{ ok: true } | AadhaarError> {
-  // TODO: owner ka API. Abhi demo — koi bhi 6-digit chalega.
-  return { ok: true };
+// Step 1: OTP1 submit karo
+export async function aadhaarSubmitOtp1(otp: string): Promise<{ ok: true } | AadhaarError> {
+  try {
+    const r = await proxyLookup({ step: 'otp1', phone: _phone, otp, sessionId: _sessionId });
+    const d = await r.json().catch(() => ({})) as Record<string, unknown>;
+    if (!r.ok) return { ok: false, error: (d.error as string) ?? `OTP verify fail (${r.status})` };
+    if (d.sessionId) _sessionId = d.sessionId as string;
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Panel unreachable — internet check karo.' };
+  }
 }
 
-// Step 2: OTP2 submit → demo me result return. Real me: POST /aadhaar/otp2 {phone, otp}
-export async function aadhaarSubmitOtp2(_otp: string): Promise<
+// Step 2: OTP2 submit karo → result milta hai
+export async function aadhaarSubmitOtp2(otp: string): Promise<
   { ok: true; result: AadhaarResult } | AadhaarError
 > {
-  // TODO: owner ka API — result uske response se aayega. Abhi demo.
-  return {
-    ok: true,
-    result: {
-      text:
-        'Name: Ramesh Kumar Sharma\n' +
-        'DOB: 15/08/1988\n' +
-        'Gender: Male\n' +
-        'Aadhaar (masked): 9876 •••• 1234\n' +
-        'Address: 45, MG Road, Andheri East, Mumbai 400069',
-      photos: [
-        { label: 'Photo 1 — front' },
-        { label: 'Photo 2 — signature' },
-      ],
-      pdfName: 'Aadhaar_RameshKumarSharma.pdf',
-    },
-  };
+  try {
+    const r = await proxyLookup({ step: 'otp2', phone: _phone, otp, sessionId: _sessionId });
+    const d = await r.json().catch(() => ({})) as Record<string, unknown>;
+    if (!r.ok) return { ok: false, error: (d.error as string) ?? `OTP2 verify fail (${r.status})` };
+
+    // Provider response se result banao — field names flexible (provider vary kar sakta hai)
+    const text = (d.text ?? d.data ?? d.details ?? d.info ?? 'Aadhaar data mila') as string;
+    const rawPhotos = Array.isArray(d.photos) ? d.photos as { uri?: string; label?: string }[]
+      : d.photo ? [{ uri: d.photo as string, label: 'Photo' }]
+      : d.image ? [{ uri: d.image as string, label: 'Photo' }]
+      : [];
+    const photos: AadhaarPhoto[] = rawPhotos.map((p, i) => ({
+      label: p.label ?? `Photo ${i + 1}`,
+      uri: p.uri,
+    }));
+    const pdfName = (d.pdfName ?? d.pdf_name ?? `Aadhaar_${_phone}.pdf`) as string;
+    const pdfUri = (d.pdfUri ?? d.pdf_url ?? d.pdf ?? undefined) as string | undefined;
+
+    return { ok: true, result: { text, photos, pdfName, pdfUri } };
+  } catch {
+    return { ok: false, error: 'Panel unreachable — internet check karo.' };
+  }
 }

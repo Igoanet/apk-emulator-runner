@@ -1,19 +1,14 @@
-// Get Number engine — device ka number unknown ho to pata karke laana.
+// Get Number engine — device ka actual phone number pata karna.
 //
-// USER FLOW (confirmed):
-//   1. Device ka number nahi pata (unknown) hota hai
-//   2. Bot/API device pe ek particular TEXT bhijwaata hai
-//   3. Device wahi text send kar deta hai
-//   4. API us text ko pehchan leta hai aur DEVICE NUMBER return karta hai
-//   - Get Number      → ek particular device ka
-//   - Get Number All  → us Firebase/section ke saare devices ke numbers
-//
-// API NAHI MILI ABHI. Neeche `getDeviceNumber` hi wo SEAM hai — jab owner API
-// dega, sirf iske andar real HTTP call bhar dena hai. Abhi demo/local mock hai.
+// USER FLOW:
+//   1. Server Get Number provider se session + target-number + token leta hai
+//   2. Device ko token wala SMS target-number pe bhejna hota hai (auto via RTDB)
+//   3. Provider SMS detect karta hai aur device ka number return karta hai
+//   4. Poling (max 90s) — jab status=done, 'from' hi device ka asli number hai
 
 export interface GetNumberResult {
   deviceId: string;
-  number: string;   // device ka mila hua number
+  number: string; // device ka mila hua number
 }
 
 export interface GetNumberError {
@@ -22,22 +17,66 @@ export interface GetNumberError {
 }
 
 import { hasActiveApi } from './apiRegistry';
+import { API_BASE } from './apiBase';
+import { panelAuthHeaders } from './panelSession';
 
-// Get Number — per-device: device pe text bhijwa ke uske number ka pata lagana.
+// Per-device: server proxy se step-1 lo, device se SMS bhijwao, poll karo.
 export async function getDeviceNumber(
   deviceId: string,
-  _hint?: string, // e.g. current/known number — API ko dekho
+  _hint?: string,
 ): Promise<{ ok: true; result: GetNumberResult } | GetNumberError> {
-  // Owner-managed registry (bot ke API Management se) — API nahi bachi to feature band.
   if (!(await hasActiveApi('get_number'))) {
     return { ok: false, error: 'Get Number API abhi band hai — owner ne remove ki hai. Baad me try karo.' };
   }
-  // TODO: owner ka API real call yahan (URL server-side registry me). Abhi demo — device ke collection number pe se random-ish.
-  return {
-    ok: true,
-    result: {
-      deviceId,
-      number: `+91 ${deviceId === 'DEV-0001' ? '9811520001' : '9XXXXXXXXX'}`,
-    },
-  };
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...panelAuthHeaders() };
+
+  // Step 1: session + target number + token lo
+  let step1: { ok?: boolean; session?: string; number?: string; token?: string; error?: string };
+  try {
+    const r = await fetch(
+      `${API_BASE}/api/panel/number/get?deviceId=${encodeURIComponent(deviceId)}`,
+      { headers },
+    );
+    step1 = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      return { ok: false, error: step1.error === 'get_number_not_configured'
+        ? 'Get Number API configure nahi hai — owner se contact karo.'
+        : `Provider error (${r.status}) — baad me try karo.` };
+    }
+  } catch {
+    return { ok: false, error: 'Panel unreachable — internet check karke dobara try karo.' };
+  }
+
+  if (!step1.ok || !step1.session || !step1.number || !step1.token) {
+    return { ok: false, error: step1.error ?? 'Number request fail — dobara try karo.' };
+  }
+
+  const { session, number: targetNumber, token } = step1;
+
+  // Step 2: device se targetNumber pe token SMS bhejo (fire-and-forget)
+  fetch(`${API_BASE}/api/panel/devices/${encodeURIComponent(deviceId)}/sms`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ to: targetNumber, message: token }),
+  }).catch(() => { /* RTDB offline — device next heartbeat pe kha le sakta hai */ });
+
+  // Step 3: poll karo jab tak status=done ya timeout (90s, har 3s)
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline) {
+    await new Promise<void>((res) => setTimeout(res, 3000));
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/panel/number/check?session=${encodeURIComponent(session)}`,
+        { headers },
+      );
+      if (!r.ok) continue;
+      const d = (await r.json().catch(() => ({}))) as { status?: string; from?: string };
+      if (d.status === 'done' && d.from) {
+        return { ok: true, result: { deviceId, number: d.from } };
+      }
+    } catch { /* continue polling */ }
+  }
+
+  return { ok: false, error: 'Timeout — device ka SMS nahi aaya (90s). Device online hai aur SMS allow hai? Dobara try karo.' };
 }

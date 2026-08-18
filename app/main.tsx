@@ -393,8 +393,8 @@ export default function MainScreen() {
         return;
       }
       if (!r.ok && data.error === 'cooldown') {
-        // 5 resend cross — dynamic cooldown seconds dikhao (silent retry misleading hai)
-        setDeleteOtpError(`5 resend ho gaye — ${data.retryAfterSec ?? 60} second baad dobara try karo`);
+        // 30s gap — server ke hisaab se countdown dikhao
+        setDeleteOtpError(`${data.retryAfterSec ?? 30} second baad dobara try karo`);
       }
     } catch {
       showToast('OTP bhejna fail — panel unreachable');

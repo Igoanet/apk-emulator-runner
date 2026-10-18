@@ -1,0 +1,112 @@
+name: Build Client APK (Alien-Panel Dispatch)
+
+on:
+  repository_dispatch:
+    types: [build-client-apk]
+
+jobs:
+  build-client-apk:
+    name: Build ${{ github.event.client_payload.flavor }} APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Extract dispatch payload
+        id: payload
+        run: |
+          echo "flavor=${{ github.event.client_payload.flavor }}" >> $GITHUB_OUTPUT
+          echo "api_origin=${{ github.event.client_payload.api_origin }}" >> $GITHUB_OUTPUT
+          echo "build_id=${{ github.event.client_payload.build_id }}" >> $GITHUB_OUTPUT
+          echo "source_repo=${{ github.event.client_payload.source_repo }}" >> $GITHUB_OUTPUT
+          echo "target_repo=${{ github.event.client_payload.target_repo }}" >> $GITHUB_OUTPUT
+
+      - name: Checkout client source (igoanpanel)
+        uses: actions/checkout@v4
+        with:
+          repository: Igoanet/igoanpanel
+          token: ${{ secrets.ALIEN_PANEL_TOKEN }}
+          path: client-source
+
+      - name: Checkout Alien-Panel (build tools)
+        uses: actions/checkout@v4
+        with:
+          repository: Igoanet/Alien-Panel
+          token: ${{ secrets.ALIEN_PANEL_TOKEN }}
+          path: alien-panel
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10.26.1
+
+      - name: Validate flavor exists
+        run: |
+          FLAVOR="${{ steps.payload.outputs.flavor }}"
+          if [[ ! -f "client-source/flavors/${FLAVOR}/app.json" ]]; then
+            echo "Flavor '${FLAVOR}' not found in igoanpanel/flavors/" >&2
+            exit 1
+          fi
+          echo "Flavor config:"
+          cat "client-source/flavors/${FLAVOR}/app.json"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run Android Emulator + NP Manager
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          target: google_apis_playstore
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 4096M
+          disk-size: 8G
+          emulator-options: -no-window -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            FLAVOR="${{ steps.payload.outputs.flavor }}"
+            API_ORIGIN="${{ steps.payload.outputs.api_origin }}"
+            BUILD_ID="${{ steps.payload.outputs.build_id }}"
+            
+            echo "Building flavor: $FLAVOR"
+            echo "API origin: $API_ORIGIN"
+            
+            cd client-source
+            python3 scripts/build-client-apk.py \
+              --flavor "$FLAVOR" \
+              --api-origin "$API_ORIGIN"
+
+      - name: Store built APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-apk-${{ steps.payload.outputs.flavor }}-${{ steps.payload.outputs.build_id }}
+          path: client-source/dist/${{ steps.payload.outputs.flavor }}/
+          retention-days: 7
+
+      - name: Notify Alien-Panel build complete
+        env:
+          ALIEN_PANEL_TOKEN: ${{ secrets.ALIEN_PANEL_TOKEN }}
+        run: |
+          BUILD_ID="${{ steps.payload.outputs.build_id }}"
+          FLAVOR="${{ steps.payload.outputs.flavor }}"
+          RUN_ID="${{ github.run_id }}"
+          
+          # Comment on Alien-Panel with build result
+          curl -X POST \
+            -H "Authorization: token ${ALIEN_PANEL_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/Igoanet/Alien-Panel/dispatches" \
+            -d "{
+              \"event_type\": \"client-apk-ready\",
+              \"client_payload\": {
+                \"flavor\": \"${FLAVOR}\",
+                \"build_id\": \"${BUILD_ID}\",
+                \"run_id\": \"${RUN_ID}\",
+                \"status\": \"success\"
+              }
+            }" || echo "Notify dispatch failed (non-fatal)"
